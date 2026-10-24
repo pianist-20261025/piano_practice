@@ -40,8 +40,11 @@ describe('buildSteps', () => {
     expect(steps.map((s) => s.entryIndex)).toEqual([entries[0].index, entries[1].index, entries[4].index]);
   });
 
-  it('同じ鍵盤が2声で重なったら1回だけ判定する', () => {
-    expect(buildSteps([e(0, [n(67), n(67)])])[0].notes).toHaveLength(1);
+  it('同じ鍵盤が2声で重なったら1回だけ判定し、色付け用に元の音符を両方覚えておく', () => {
+    const entry = e(0, [n(67), n(67, 'right', { duration: 3 })]);
+    const [step] = buildSteps([entry]);
+    expect(step.notes).toHaveLength(1);
+    expect(step.notes[0].refs).toEqual([{ entryIndex: entry.index, rawIndex: 0 }, { entryIndex: entry.index, rawIndex: 1 }]);
   });
 });
 

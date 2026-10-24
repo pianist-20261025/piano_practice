@@ -34,6 +34,11 @@ export interface StepNote {
   entryIndex: number;
   rawIndex: number;
   /**
+   * 同じ鍵盤の音が複数の声部に重なって書かれているとき（1つにまとめて判定する）の、元の音符すべて。
+   * 色付けは全部に行う（片方だけタイが付いていることがあるため）
+   */
+  refs: { entryIndex: number; rawIndex: number }[];
+  /**
    * 同じ高さの音がまだ鳴っている（別の声部の長い音やタイが続いている）ところに書かれた音。
    * ピアノでは鍵盤を押したままのことが多く、押し直しが起きないので、押さえたままなら弾けたとみなす
    */
@@ -98,8 +103,13 @@ export function buildSteps(entries: readonly RawEntry[], hands: HandSetting = 'b
     entry.notes.forEach((n, rawIndex) => {
       if (n.rest || n.grace || n.tieContinuation) return;
       if (hands !== 'both' && n.hand !== hands) return;
-      if (g.notes.some((x) => x.midi === n.midi)) return;
-      g.notes.push({ midi: n.midi, hand: n.hand, entryIndex: entry.index, rawIndex, sustained: false });
+      const ref = { entryIndex: entry.index, rawIndex };
+      const same = g.notes.find((x) => x.midi === n.midi);
+      if (same) {
+        same.refs.push(ref);
+        return;
+      }
+      g.notes.push({ midi: n.midi, hand: n.hand, ...ref, refs: [ref], sustained: false });
     });
     for (const n of entry.notes) {
       if (!n.rest && !n.grace && n.duration > 0) sounding.push({ midi: n.midi, start: g.time, end: g.time + n.duration });

@@ -26,6 +26,10 @@ export class OsmdScore {
   /** カーソル位置ごとの OSMD の音（RawEntry.notes と同じ順） */
   private notes: Note[][] = [];
   private colored = new Set<Note>();
+  /** 音ごとの、曲頭からの位置（4分音符単位） */
+  private noteTime = new Map<Note, number>();
+  /** タイの後ろ側で、カーソルがそこまで来たら色を付ける音 */
+  private pendingTies: { note: Note; time: number; color: string }[] = [];
 
   constructor(container: HTMLElement) {
     this.osmd = new OpenSheetMusicDisplay(container, {
@@ -42,6 +46,8 @@ export class OsmdScore {
     await this.osmd.load(xml);
     this.osmd.render();
     this.colored.clear();
+    this.noteTime.clear();
+    this.pendingTies = [];
     const cursor = this.osmd.cursor;
     cursor.reset();
     cursor.show();
@@ -81,6 +87,7 @@ export class OsmdScore {
       });
       keys.push(key);
       this.notes.push(notes);
+      for (const note of notes) if (!this.noteTime.has(note)) this.noteTime.set(note, it.CurrentSourceTimestamp.RealValue * 4);
       this.iterators.push(it.clone());
       it.moveToNextVisibleVoiceEntry(false);
     }
@@ -112,23 +119,41 @@ export class OsmdScore {
 
   /**
    * entryIndex 番目の位置の rawIndex 番目の音の符頭に色を付ける（null で元に戻す）。
-   * タイの始まりの音なら、タイでつながった後ろ側の音符にも同じ色を付ける（押し直さずに鳴り続けるため）
+   * タイの始まりの音なら、タイでつながった後ろ側の音符にも、曲がそこまで進んだとき（revealTiesUpTo）に同じ色を付ける
    */
   colorNote(entryIndex: number, rawIndex: number, color: string | null): void {
     const note = this.notes[entryIndex]?.[rawIndex];
     if (!note) return;
+    this.paintNote(note, color);
     const tie = note.NoteTie;
-    const chain = tie && tie.StartNote === note ? tie.Notes : [note];
-    for (const n of chain) {
-      paint(this.osmd, n, color);
-      if (color) this.colored.add(n);
-      else this.colored.delete(n);
+    if (!tie || tie.StartNote !== note) return;
+    const rest = tie.Notes.filter((n) => n !== note);
+    this.pendingTies = this.pendingTies.filter((p) => !rest.includes(p.note));
+    if (color) {
+      for (const n of rest) this.pendingTies.push({ note: n, time: this.noteTime.get(n) ?? Infinity, color });
+    } else {
+      for (const n of rest) this.paintNote(n, null);
     }
+  }
+
+  /** 曲頭から time（4分音符単位）までにあるタイの後ろ側の音に、始まりの音と同じ色を付ける */
+  revealTiesUpTo(time: number): void {
+    const due = this.pendingTies.filter((p) => p.time <= time + 1e-3);
+    if (!due.length) return;
+    this.pendingTies = this.pendingTies.filter((p) => p.time > time + 1e-3);
+    for (const p of due) this.paintNote(p.note, p.color);
+  }
+
+  private paintNote(note: Note, color: string | null): void {
+    paint(this.osmd, note, color);
+    if (color) this.colored.add(note);
+    else this.colored.delete(note);
   }
 
   clearColors(): void {
     for (const note of this.colored) paint(this.osmd, note, null);
     this.colored.clear();
+    this.pendingTies = [];
   }
 }
 
