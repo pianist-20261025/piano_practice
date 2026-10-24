@@ -3,12 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2f5d8a" />
+    <meta name="description" content="電子ピアノをMIDIでつないで、読譜と初見演奏を鍛える練習アプリ" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <title>読譜トレーニング</title>
   </head>
   <body>
     <header>
       <h1>読譜トレーニング <span id="mode-label" class="mode">反射モード</span></h1>
       <div id="midi-status" class="midi-status">MIDI を確認中…</div>
+      <div id="offline-status" class="offline-status" hidden></div>
       <div id="storage-warning" class="storage-warning" hidden></div>
     </header>
 
@@ -51,7 +56,11 @@
             <legend>曲</legend>
             <div class="row">
               <label>曲 <select id="song-source"></select></label>
-              <label class="file-button">ファイルを開く（.musicxml / .mxl）<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" hidden /></label>
+            </div>
+            <div class="row">
+              <label class="file-button">曲を追加（.musicxml / .mxl、複数可）<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" multiple hidden /></label>
+              <button id="song-remove" type="button">選んだ曲をライブラリから削除</button>
+              <span id="song-library-status" class="hint-inline" aria-live="polite"></span>
             </div>
             <div class="row">
               <span class="row-label">進め方</span>

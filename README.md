@@ -6,10 +6,45 @@
 
 ```sh
 npm install
-npm run dev      # http://localhost:5173 を Chrome で開く
+npm run app      # ビルドして http://localhost:4173 で起動（ふだん使う・インストールするのはこちら）
+npm run dev      # 開発用（http://localhost:5173、コードを書き換えるとすぐ反映。オフライン機能は無効）
 npm test         # ユニットテスト（Vitest）
-npm run build    # 型チェック + 本番ビルド
+npm run build    # 型チェック + 本番ビルド（dist/）
 ```
+
+## オフラインで使う（アプリとしてインストール）
+
+PWA（インストールできる Web アプリ）として作ってある。アプリ本体と同梱の曲は、最初に開いたときにブラウザへ保存されるので、そのあとはネットにつながっていなくても、サーバーを止めていても動く。
+
+1. `npm run app` を実行し、Chrome で http://localhost:4173 を開く（右上に「✓ オフラインでも使えます」と出れば準備完了）
+2. アドレスバー右端のインストールのアイコン（またはメニュー →「キャスト、保存、共有」→「ページをアプリとしてインストール」）で「読譜トレーニング」をインストール
+3. 以後はデスクトップ／アプリ一覧のアイコンから開く。ターミナルの `npm run app` は止めてよい
+
+- 記録・追加した曲・設定は、このPCの Chrome の中（IndexedDB / localStorage）に保存される。ブラウザのサイトデータを消すと消えるので、統計画面の「記録を書き出す」でときどき保存しておく。
+- コードを更新したら、もう一度 `npm run app` で開くと、次回起動時に新しい版へ自動で入れ替わる。
+- 別のPCでも使いたい場合は、GitHub に push して GitHub Pages で公開すると（`.github/workflows/pages.yml`。Settings → Pages で Source を「GitHub Actions」にする）、HTTPS のアドレスからどのPCの Chrome でもインストールできる。Web MIDI は HTTPS か localhost でしか動かない。
+
+## 曲を増やす
+
+方法は3つ。
+
+1. **アプリから追加する（いちばん手軽）**: 曲モードの「曲を追加」で .musicxml / .mxl を選ぶ（複数まとめて選べる）。曲はブラウザ内のライブラリに保存され、オフラインでも選べる。不要になったら「選んだ曲をライブラリから削除」（練習記録は残る）。
+2. **アプリに同梱する**: `public/samples/` にファイルを置いて `npm run songs:index` を実行すると、曲一覧（`public/samples/index.json`）が作り直される。曲名は楽譜の題名から取る。`index.json` の title を手で書き換えれば、その名前が残る。次に `npm run app` するとオフライン用にも保存される。
+3. **バッハのコラールをまとめて書き出す**: music21 同梱のコラール（約370曲、4声）を、ソプラノ+アルト／テノール+バスの2段譜にして書き出せる（いまは12曲同梱）。
+
+   ```sh
+   pip install music21
+   python3 tools/make_samples.py public/samples --chorales 50
+   npm run songs:index
+   ```
+
+### 楽譜（MusicXML）の手に入れ方
+
+- **MuseScore**（無料の楽譜ソフト）: 自分で打ち込むか、開いた楽譜を「ファイル → エクスポート → MusicXML（.mxl / .musicxml）」で書き出す。musescore.com にはパブリックドメインの楽譜も多い（ダウンロードにはアカウントが必要）。
+- **IMSLP の PDF → Audiveris で楽譜認識（OMR）**: 著作権の切れた曲のほとんどが PDF で手に入る。Audiveris で MusicXML に変換し、MuseScore で読み取りミスを直してから書き出す。
+- **music21 のコーパス**: 上のコラールのほか、モーツァルトやベートーヴェンの一部の作品などが入っている（`corpus.parse(...)` → `write('musicxml')`）。
+
+曲モードはピアノ譜（大譜表）の上の段を右手、下の段を左手として判定する。1段の曲（旋律だけ）は右手として扱う。装飾音・繰り返し記号・ペダル・アルペジオのずれは判定しない。
 
 - 開くと Chrome が MIDI の使用許可を求めるので「許可」する。P-225 を USB TO HOST で接続すると右上にデバイス名が出る（抜き差しにも追従）。
 - MIDI がなくても、画面下の仮想鍵盤（クリック）か PC キーボードで同じ操作ができる。
@@ -56,7 +91,8 @@ src/
   render/      VexFlow による五線描画と色付け、流れ読みの横長の譜面（phraseRenderer）とスクロール位置の計算（timeline）
   stats/       回答記録と集計
   ui/          画面とモード進行
-  score/       MusicXML の表示とカーソル（OSMD）、判定用のステップ列への変換（純粋関数）
+  score/       MusicXML の表示とカーソル（OSMD）、判定用のステップ列への変換（純粋関数）、曲のライブラリ
+  storage/     IndexedDB の接続（回答記録と曲のライブラリで共通）
   audio/       メトロノーム（Web Audio）と拍の予約（BeatClock。曲のテンポモードと流れ読みで共通）
 ```
 
@@ -68,11 +104,6 @@ src/
 - テンポのある判定（曲のテンポモード・流れ読み）は `TimedMatcher` で共通。押鍵を、同じ音で時刻が窓の中にあるいちばん近い目標に結び付ける。
 - 判定はノート番号のみで行うため、異名同音は自然に同一扱い。
 
-## サンプル曲
+## 同梱の曲
 
-`public/samples/` の2曲は `tools/make_samples.py`（要 music21）で作ったもの。メヌエットは手で打ち込んだので、原典と細部が違う可能性がある。コラールは music21 同梱コーパスの BWV 66.6（4声）を、ソプラノ+アルト／テノール+バスの2段にまとめたもの（タイ・持続音の確認用）。
-
-```sh
-pip install music21
-python3 tools/make_samples.py public/samples
-```
+`public/samples/` の曲は `tools/make_samples.py`（要 music21）で作ったもの。メヌエット ト長調 BWV Anh. 114（前半）は手で打ち込んだので、原典と細部が違う可能性がある。コラール（BWV 66.6 ほか12曲）は music21 同梱コーパスの4声体を2段にまとめたもの。

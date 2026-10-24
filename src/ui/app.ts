@@ -21,6 +21,7 @@ import {
   parseExportedRecords,
   type RecordStore,
 } from '../stats/store';
+import { SongLibrary, loadBundledSongs, readSongFile, songTitle, type BundledSong, type LibrarySong } from '../score/library';
 import type { HandSetting } from '../score/steps';
 import type { Rhythm } from '../generator/phrase';
 import { FlowPractice, summarizeFlow, type FlowResult } from './flowMode';
@@ -36,7 +37,7 @@ interface Settings {
   songBpm: number | null;
   toleranceMs: number;
   metronome: boolean;
-  /** サンプルの id、または 'file'（最後に開いたファイル） */
+  /** 'sample:<ファイル>'（同梱の曲）か 'lib:<id>'（ライブラリに追加した曲） */
   songSource: string;
   /** 流れ読み */
   flowMeasures: number;
@@ -69,7 +70,7 @@ const DEFAULT_SETTINGS: Settings = {
   songBpm: null,
   toleranceMs: 100,
   metronome: true,
-  songSource: 'minuet',
+  songSource: 'sample:samples/minuet-g-bwv-anh114.musicxml',
   flowMeasures: 8,
   flowBpm: 60,
   flowRhythm: 'quarter',
@@ -99,13 +100,18 @@ const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '�
 const SONG_MODE_LABELS: Record<SongMode, string> = { wait: '待機', tempo: 'テンポ' };
 const HAND_LABELS: Record<HandSetting, string> = { both: '両手', right: '右手', left: '左手' };
 
-/** public/samples の動作確認用の曲 */
-const SAMPLES = [
-  { id: 'minuet', label: 'メヌエット ト長調 BWV Anh. 114（前半）', file: 'samples/minuet-g-bwv-anh114.musicxml' },
-  { id: 'chorale', label: 'コラール BWV 66.6（2段にまとめたもの）', file: 'samples/chorale-bwv66-6.musicxml' },
+/** samples/index.json が読めなかったときの同梱曲 */
+const FALLBACK_SAMPLES: BundledSong[] = [
+  { file: 'samples/minuet-g-bwv-anh114.musicxml', title: 'メヌエット ト長調 BWV Anh. 114（前半）' },
+  { file: 'samples/chorale-bwv66-6.musicxml', title: 'コラール BWV 66.6（2段にまとめたもの）' },
 ];
-/** 最後に開いた MusicXML ファイル（次に開いたときも選べるように保存する） */
-const SONG_FILE_KEY = 'sight-reader:song-file';
+/** 以前の版で「最後に開いたファイル」を入れていた場所（ライブラリへ移す） */
+const LEGACY_SONG_FILE_KEY = 'sight-reader:song-file';
+/** 以前の版の songSource の値 */
+const LEGACY_SOURCES: Record<string, string> = {
+  minuet: 'sample:samples/minuet-g-bwv-anh114.musicxml',
+  chorale: 'sample:samples/chorale-bwv66-6.musicxml',
+};
 
 interface Question {
   clef: Clef;
@@ -151,7 +157,9 @@ export class App {
   private virtualPending: { notes: number[]; time: number } | null = null;
   private song!: SongPractice;
   private flow!: FlowPractice;
-  private songFile: { name: string; data: string } | null = loadSongFile();
+  private songLibrary = new SongLibrary();
+  private bundledSongs: BundledSong[] = [];
+  private librarySongs: LibrarySong[] = [];
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -189,7 +197,8 @@ export class App {
       },
     });
     $('#flow-stop').addEventListener('click', () => this.finishSession());
-    $<HTMLInputElement>('#song-file').addEventListener('change', (e) => this.openSongFile(e.target as HTMLInputElement));
+    $<HTMLInputElement>('#song-file').addEventListener('change', (e) => this.addSongFiles(e.target as HTMLInputElement));
+    $('#song-remove').addEventListener('click', () => this.removeSelectedSong());
 
     this.bindSettingsForm();
     $('#start').addEventListener('click', () => this.startSession());
@@ -209,6 +218,7 @@ export class App {
     this.showView('setup');
     this.scrollKeyboardToRange();
     this.loadHistory();
+    void this.loadSongs();
   }
 
   // ---- 記録 ----
@@ -577,33 +587,89 @@ export class App {
 
   private async songSource(): Promise<{ name: string; data: string }> {
     const id = this.settings.songSource;
-    if (id === 'file') {
-      if (!this.songFile) throw new Error('ファイルが選ばれていません');
-      return this.songFile;
+    if (id.startsWith('lib:')) {
+      const song = this.librarySongs.find((x) => `lib:${x.id}` === id);
+      if (!song) throw new Error('ライブラリにその曲がありません');
+      return song;
     }
-    const sample = SAMPLES.find((x) => x.id === id) ?? SAMPLES[0];
+    const sample = this.bundledSongs.find((x) => `sample:${x.file}` === id) ?? this.bundledSongs[0];
+    if (!sample) throw new Error('曲がありません');
     const res = await fetch(import.meta.env.BASE_URL + sample.file);
     if (!res.ok) throw new Error(`${sample.file} が見つかりません`);
-    return { name: sample.label, data: await res.text() };
+    return { name: sample.title, data: await res.text() };
   }
 
-  private async openSongFile(input: HTMLInputElement): Promise<void> {
-    const file = input.files?.[0];
+  /** 同梱の曲とライブラリを読み込んで、曲の選択肢を作る */
+  private async loadSongs(): Promise<void> {
+    const bundled = await loadBundledSongs(import.meta.env.BASE_URL);
+    this.bundledSongs = bundled.length ? bundled : FALLBACK_SAMPLES;
+    try {
+      await this.migrateLegacySongFile();
+      this.librarySongs = await this.songLibrary.list();
+    } catch (e) {
+      console.error(e);
+    }
+    this.settings.songSource = LEGACY_SOURCES[this.settings.songSource] ?? this.settings.songSource;
+    this.fillSongSources(this.settings.songSource);
+  }
+
+  /** 以前の版で localStorage に入れていた「最後に開いたファイル」をライブラリへ移す */
+  private async migrateLegacySongFile(): Promise<void> {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(LEGACY_SONG_FILE_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    const old = JSON.parse(raw) as { name: string; data: string };
+    const id = await this.songLibrary.add(old.name, old.data);
+    if (this.settings.songSource === 'file') this.settings.songSource = `lib:${id}`;
+    localStorage.removeItem(LEGACY_SONG_FILE_KEY);
+  }
+
+  private async addSongFiles(input: HTMLInputElement): Promise<void> {
+    const files = [...(input.files ?? [])];
     input.value = '';
-    if (!file) return;
-    // .mxl は zip。OSMD にはバイナリ文字列（1文字=1バイト）で渡す
-    const data = /\.mxl$/i.test(file.name) ? toBinaryString(await file.arrayBuffer()) : await file.text();
-    this.songFile = { name: file.name.replace(/\.(musicxml|xml|mxl)$/i, ''), data };
-    saveSongFile(this.songFile);
-    this.fillSongSources();
-    $<HTMLSelectElement>('#song-source').value = 'file';
-    $<HTMLFormElement>('#settings').dispatchEvent(new Event('input'));
+    if (!files.length) return;
+    let lastId: number | null = null;
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        const data = await readSongFile(file);
+        lastId = await this.songLibrary.add(songTitle(file.name, data), data);
+      } catch (e) {
+        console.error(e);
+        failed.push(file.name);
+      }
+    }
+    this.librarySongs = await this.songLibrary.list();
+    this.fillSongSources(lastId === null ? this.settings.songSource : `lib:${lastId}`);
+    const added = files.length - failed.length;
+    $('#song-library-status').textContent =
+      `${added} 曲をライブラリに追加しました` + (failed.length ? `（追加できなかったファイル: ${failed.join('、')}）` : '');
   }
 
-  private fillSongSources(): void {
-    const options = SAMPLES.map((x) => `<option value="${x.id}">${x.label}</option>`);
-    if (this.songFile) options.push(`<option value="file">${escapeHtml(this.songFile.name)}（開いたファイル）</option>`);
-    $('#song-source').innerHTML = options.join('');
+  private async removeSelectedSong(): Promise<void> {
+    const id = this.settings.songSource;
+    const song = this.librarySongs.find((x) => `lib:${x.id}` === id);
+    if (!song || !confirm(`「${song.name}」をライブラリから削除します。よろしいですか？（この曲の練習記録は残ります）`)) return;
+    await this.songLibrary.remove(song.id);
+    this.librarySongs = await this.songLibrary.list();
+    this.fillSongSources('');
+    $('#song-library-status').textContent = `「${song.name}」を削除しました`;
+  }
+
+  /** 曲の選択肢を作り直し、selected を選ぶ（なければ先頭） */
+  private fillSongSources(selected: string): void {
+    const group = (label: string, options: string[]) => (options.length ? `<optgroup label="${label}">${options.join('')}</optgroup>` : '');
+    const select = $<HTMLSelectElement>('#song-source');
+    select.innerHTML =
+      group('ライブラリ（追加した曲）', this.librarySongs.map((x) => `<option value="lib:${x.id}">${escapeHtml(x.name)}</option>`)) +
+      group('同梱の曲', this.bundledSongs.map((x) => `<option value="sample:${escapeHtml(x.file)}">${escapeHtml(x.title)}</option>`));
+    select.value = selected;
+    if (!select.value && select.options.length) select.selectedIndex = 0;
+    $<HTMLFormElement>('#settings').dispatchEvent(new Event('input'));
   }
 
   private finishSong(result: SongResult): void {
@@ -735,8 +801,6 @@ export class App {
     ).join('');
     form.querySelectorAll<HTMLInputElement>('input[name=shape]').forEach((el) => (el.checked = s.shapes.includes(el.value)));
     $<HTMLInputElement>('#chord-window').value = String(s.chordWindowMs);
-    this.fillSongSources();
-    $<HTMLSelectElement>('#song-source').value = s.songSource === 'file' && !this.songFile ? SAMPLES[0].id : s.songSource;
     radio('songMode').value = s.songMode;
     radio('hands').value = s.hands;
     $<HTMLInputElement>('#song-bpm').value = s.songBpm === null ? '' : String(s.songBpm);
@@ -777,7 +841,8 @@ export class App {
         songBpm: bpmRaw ? clampInt(bpmRaw, 20, 240, 80) : null,
         toleranceMs: clampInt($<HTMLInputElement>('#tolerance').value, 20, 300, DEFAULT_SETTINGS.toleranceMs),
         metronome: $<HTMLInputElement>('#metronome').checked,
-        songSource: $<HTMLSelectElement>('#song-source').value || SAMPLES[0].id,
+        // 曲の一覧を読み込む前は選択肢が空なので、保存してある値をそのまま使う
+        songSource: $<HTMLSelectElement>('#song-source').value || this.settings.songSource,
         flowMeasures: clampInt($<HTMLInputElement>('#flow-measures').value, 2, 64, DEFAULT_SETTINGS.flowMeasures),
         flowBpm: clampInt($<HTMLInputElement>('#flow-bpm').value, 20, 200, DEFAULT_SETTINGS.flowBpm),
         flowRhythm: $<HTMLSelectElement>('#flow-rhythm').value === 'mixed' ? 'mixed' : 'quarter',
@@ -822,6 +887,7 @@ export class App {
       form.querySelectorAll<HTMLElement>('.drill-only').forEach((el) => (el.hidden = mode === 'song' || mode === 'flow'));
       form.querySelectorAll<HTMLElement>('.generated-only').forEach((el) => (el.hidden = mode === 'song'));
       dim('#tempo-options', this.settings.songMode !== 'tempo');
+      $<HTMLButtonElement>('#song-remove').disabled = !this.settings.songSource.startsWith('lib:');
       dim('#focus-weak-label', mode !== 'reflex');
       this.grouper.setWindow(this.settings.chordWindowMs);
       saveSettings(this.settings);
@@ -840,30 +906,6 @@ function tendencyText(meanMs: number | null): string {
   if (meanMs === null) return '';
   if (Math.abs(meanMs) < 15) return 'ほぼ中心';
   return meanMs > 0 ? `平均 ${Math.round(meanMs)} ms 遅れ気味` : `平均 ${Math.round(-meanMs)} ms 走り気味`;
-}
-
-function loadSongFile(): { name: string; data: string } | null {
-  try {
-    const raw = localStorage.getItem(SONG_FILE_KEY);
-    return raw ? (JSON.parse(raw) as { name: string; data: string }) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveSongFile(file: { name: string; data: string }): void {
-  try {
-    localStorage.setItem(SONG_FILE_KEY, JSON.stringify(file));
-  } catch {
-    /* 大きすぎて保存できなくても、このタブの間は使える */
-  }
-}
-
-function toBinaryString(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return out;
 }
 
 function escapeHtml(s: string): string {

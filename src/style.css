@@ -325,3 +325,6 @@ td.note { font-weight: 600; }
 #flow-feedback.ok { color: var(--correct); }
 #flow-feedback.ng { color: var(--wrong); }
 #flow-progress { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+.offline-status { font-size: 12px; color: var(--muted); }
+.offline-status::before { content: '✓ '; color: var(--correct); }

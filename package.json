@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "app": "tsc --noEmit && vite build && vite preview",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "songs:index": "node tools/build-song-index.mjs"
   },
   "dependencies": {
     "opensheetmusicdisplay": "^2.2.1",
@@ -18,6 +20,7 @@
   "devDependencies": {
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
+    "vite-plugin-pwa": "^2.0.0",
     "vitest": "^5.0.5"
   }
 }
