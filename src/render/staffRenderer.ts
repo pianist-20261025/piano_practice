@@ -10,26 +10,28 @@ import {
 } from 'vexflow';
 import type { Clef } from '../music/clef';
 import { displayedAccidental, vexKeyName } from '../music/key';
-import { toVexKey, type Pitch } from '../music/pitch';
+import { diatonicIndex, toVexKey, type Pitch } from '../music/pitch';
 
-export type NoteStatus = 'pending' | 'correct' | 'wrong';
+/** 期待音の表示状態。pending=未回答（黒）、correct=押せた（緑）、missing=足りない（橙） */
+export type NoteState = 'pending' | 'correct' | 'missing';
 export type StaffLayout = Clef | 'grand';
 
-export interface SingleNoteView {
+export interface StaffView {
   layout: StaffLayout;
   /** 音符を書く段（大譜表のときに上下どちらか） */
   clef: Clef;
   keyFifths: number;
-  expected: Pitch;
-  status: NoteStatus;
-  /** 間違えたときに押した音。期待音と同じ段に重ねて表示する */
-  played?: Pitch;
+  /** 期待音（単音なら1つ、和音なら複数） */
+  expected: { pitch: Pitch; state: NoteState }[];
+  /** 押すべきでないのに押した音。期待音のすぐ右に赤で重ねる */
+  extra?: Pitch[];
 }
 
 export interface StaffColors {
   ink: string;
   correct: string;
   wrong: string;
+  missing: string;
 }
 
 const SCALE = 1.8;
@@ -44,22 +46,30 @@ const GRAND_GAP = 110;
 const LINE_SPACE = 10;
 /** 調号7つでも音符が収まる幅 */
 const STAVE_WIDTH = 280;
-/** 押した音を期待音の右にずらす量 */
+/** 押した音を期待音の右にずらす最小量 */
 const PLAYED_SHIFT = 42;
+/** 期待音の右端と押した音（臨時記号を含む）の左端の間 */
+const PLAYED_GAP = 8;
 
-/** VexFlow で1小節分の五線（または大譜表）に単音を描く。 */
+/** VexFlow で1小節分の五線（または大譜表）に単音・和音を描く。 */
 export class StaffRenderer {
   constructor(
     private readonly container: HTMLElement,
     private readonly colors: () => StaffColors,
   ) {}
 
-  render(view: SingleNoteView): void {
+  render(view: StaffView): void {
     const colors = this.colors();
-    const expectedColor = view.status === 'correct' ? colors.correct : colors.ink;
-    const expected = makeNote(view.clef, view.expected, view.keyFifths, expectedColor);
-    const played =
-      view.status === 'wrong' && view.played ? makeNote(view.clef, view.played, view.keyFifths, colors.wrong) : null;
+    const stateColor: Record<NoteState, string> = { pending: colors.ink, correct: colors.correct, missing: colors.missing };
+    const expected = makeChord(
+      view.clef,
+      view.expected.map((e) => ({ pitch: e.pitch, color: stateColor[e.state] })),
+      view.keyFifths,
+      colors.ink,
+    );
+    const played = view.extra?.length
+      ? makeChord(view.clef, view.extra.map((pitch) => ({ pitch, color: colors.wrong })), view.keyFifths, colors.wrong)
+      : null;
 
     // 五線から大きく外れた音（押し間違いで低すぎる音など）も切れないよう、上下の余白を広げる。
     // 大譜表では上段の音が上に、下段の音が下にはみ出す分だけを見る
@@ -94,8 +104,16 @@ export class StaffRenderer {
     // 音符は調号の後ろの空きの中央あたりに置く
     const free = stave.getX() + stave.getWidth() - stave.getNoteStartX();
     const x = free / 2 - PLAYED_SHIFT / 2 - 10;
-    drawAt(ctx, stave, expected, x);
-    if (played) drawAt(ctx, stave, played, x + PLAYED_SHIFT);
+    place(ctx, stave, expected, x);
+    expected.draw();
+    if (played) {
+      place(ctx, stave, played, 0);
+      // 2度で横にずれた符頭や臨時記号があっても重ならないよう、実際の幅から間隔を決める
+      const e = expected.getMetrics();
+      const gap = e.notePx + e.rightDisplacedHeadPx + e.modRightPx + played.getMetrics().modLeftPx + PLAYED_GAP;
+      played.getTickContext().setX(x + Math.max(PLAYED_SHIFT, gap));
+      played.draw();
+    }
   }
 }
 
@@ -107,23 +125,28 @@ function makeStave(ctx: RenderContext, clef: Clef, y: number, keyFifths: number)
   return stave;
 }
 
-/** Formatter を使わず、音符を五線上の指定位置に置いて描く */
-function drawAt(ctx: RenderContext, stave: Stave, note: StaveNote, x: number): void {
+/** Formatter を使わず、音符を五線上の指定位置に置く（描くのは呼び出し側） */
+function place(ctx: RenderContext, stave: Stave, note: StaveNote, x: number): void {
   note.setStave(stave).setContext(ctx);
   note.addToModifierContext(new ModifierContext());
   new TickContext().addTickable(note).preFormat().setX(x);
-  note.draw();
 }
 
 const VEX_ACCIDENTALS: Record<number, string> = { [-2]: 'bb', [-1]: 'b', 0: 'n', 1: '#', 2: '##' };
 
-function makeNote(clef: Clef, pitch: Pitch, keyFifths: number, color: string): StaveNote {
-  const note = new StaveNote({ clef, keys: [toVexKey(pitch)], duration: 'w', align_center: true });
-  const acc = displayedAccidental(pitch, keyFifths);
-  if (acc !== null) {
-    note.addModifier(new Accidental(VEX_ACCIDENTALS[acc]).setStyle({ fillStyle: color, strokeStyle: color }), 0);
-  }
-  note.setStyle({ fillStyle: color, strokeStyle: color });
-  note.setLedgerLineStyle({ fillStyle: color, strokeStyle: color });
+/** 全音符の和音（単音も可）。音ごとに色を付ける。加線は全音が同じ色ならその色、混在なら fallback */
+function makeChord(clef: Clef, notes: { pitch: Pitch; color: string }[], keyFifths: number, fallback: string): StaveNote {
+  // VexFlow のキー番号と色の対応がずれないよう、低い順に並べてから渡す
+  const sorted = [...notes].sort((a, b) => diatonicIndex(a.pitch) - diatonicIndex(b.pitch) || a.pitch.alter - b.pitch.alter);
+  const note = new StaveNote({ clef, keys: sorted.map((n) => toVexKey(n.pitch)), duration: 'w', align_center: true });
+  sorted.forEach(({ pitch, color }, i) => {
+    const style = { fillStyle: color, strokeStyle: color };
+    note.setKeyStyle(i, style);
+    const acc = displayedAccidental(pitch, keyFifths);
+    if (acc !== null) note.addModifier(new Accidental(VEX_ACCIDENTALS[acc]).setStyle(style), i);
+  });
+  const colors = new Set(sorted.map((n) => n.color));
+  const ledger = colors.size === 1 ? sorted[0].color : fallback;
+  note.setLedgerLineStyle({ fillStyle: ledger, strokeStyle: ledger });
   return note;
 }

@@ -1,8 +1,10 @@
-import { generateSingleNote, type DiatonicRange, type KeySetting, type SingleNoteQuestion } from '../generator/singleNote';
+import { DEFAULT_SHAPE_IDS, SHAPES, generateShape, shapeById } from '../generator/shape';
+import { generateSingleNote, type DiatonicRange, type KeySetting } from '../generator/singleNote';
 import { InputHub } from '../input/hub';
 import { PcKeyboardInput } from '../input/pcKeyboard';
 import { VirtualKeyboard } from '../input/virtualKeyboard';
 import { judgeAttempt, type JudgeOptions } from '../judge/judge';
+import { CHORD_WINDOW_RANGE, ChordGrouper, DEFAULT_CHORD_WINDOW_MS } from '../midi/chordGrouper';
 import { MidiInput, type MidiStatus } from '../midi/midiInput';
 import type { NoteEvent } from '../midi/types';
 import { CLEFS, CLEF_LABELS, ledgerLinesAt, staffRange, type Clef } from '../music/clef';
@@ -10,7 +12,7 @@ import { KEY_FIFTHS_RANGE, keyLabel, spellMidiInKey } from '../music/key';
 import { diatonicIndex, pitchFromDiatonic, pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type StaffColors, type StaffLayout } from '../render/staffRenderer';
 import { makeWeightFn } from '../stats/noteStats';
-import { summarize, type AnswerRecord } from '../stats/session';
+import { summarize, type AnswerRecord, type Mode } from '../stats/session';
 import {
   IndexedDbRecordStore,
   MemoryRecordStore,
@@ -22,6 +24,11 @@ import {
 import { renderStats } from './statsView';
 
 interface Settings {
+  mode: Mode;
+  /** 形で読むモードで出す形の id */
+  shapes: string[];
+  /** この時間内に押した音を1つの和音とみなす（ms） */
+  chordWindowMs: number;
   limitKind: 'count' | 'time';
   count: number;
   seconds: number;
@@ -37,6 +44,9 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
+  mode: 'reflex',
+  shapes: DEFAULT_SHAPE_IDS,
+  chordWindowMs: DEFAULT_CHORD_WINDOW_MS,
   limitKind: 'count',
   count: 20,
   seconds: 60,
@@ -56,14 +66,21 @@ const MAX_LEDGER_LINES = 4;
 const NEXT_DELAY_MS = 350;
 
 const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
+const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード' };
 
-interface Question extends SingleNoteQuestion {
-  midi: number;
+interface Question {
+  clef: Clef;
+  keyFifths: number;
+  /** 形で読むモードの形の id。単音なら null */
+  shape: string | null;
+  /** 低い順 */
+  pitches: Pitch[];
+  midis: number[];
   shownAt: number;
   attempts: number;
   record: AnswerRecord | null;
   /** 最初に押した音（譜面上の綴り） */
-  firstPlayed: Pitch | null;
+  firstPlayed: Pitch[] | null;
   saved: boolean;
 }
 
@@ -89,6 +106,10 @@ export class App {
   private history: AnswerRecord[] = [];
   private view: View = 'setup';
   private viewBeforeStats: View = 'setup';
+  /** MIDI・PCキーボードの押鍵を和音にまとめる */
+  private grouper = new ChordGrouper(DEFAULT_CHORD_WINDOW_MS, (chord) => this.submit(chord.notes, chord.time));
+  /** 仮想鍵盤はクリックで1音ずつしか押せないので、和音の音数ぶん集めてから判定する */
+  private virtualPending: { notes: number[]; time: number } | null = null;
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -223,25 +244,40 @@ export class App {
 
   private nextQuestion(): void {
     this.advancing = false;
+    this.grouper.reset();
+    this.virtualPending = null;
     if (this.settings.limitKind === 'count' && this.records.length >= this.settings.count) {
       this.finishSession();
       return;
     }
     const s = this.settings;
-    const generated = generateSingleNote(
-      {
-        clefs: s.layout === 'grand' ? CLEFS : [s.layout],
-        ranges: s.ranges,
-        key: keySetting(s),
-        accidentals: s.accidentals,
-        weight: s.focusWeak ? makeWeightFn(this.history) : undefined,
-      },
-      Math.random,
-      this.question ?? undefined,
-    );
+    const prev = this.question;
+    const common = { clefs: s.layout === 'grand' ? CLEFS : [s.layout], ranges: s.ranges, key: keySetting(s), accidentals: s.accidentals };
+    let generated: { clef: Clef; keyFifths: number; shape: string | null; pitches: Pitch[] };
+    try {
+      if (s.mode === 'shape') {
+        const g = generateShape(
+          { ...common, shapes: s.shapes },
+          Math.random,
+          prev?.shape ? { clef: prev.clef, keyFifths: prev.keyFifths, shape: prev.shape, pitches: prev.pitches } : undefined,
+        );
+        generated = g;
+      } else {
+        const g = generateSingleNote(
+          { ...common, weight: s.focusWeak ? makeWeightFn(this.history) : undefined },
+          Math.random,
+          prev && !prev.shape ? { clef: prev.clef, keyFifths: prev.keyFifths, pitch: prev.pitches[0] } : undefined,
+        );
+        generated = { ...g, shape: null, pitches: [g.pitch] };
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+      this.finishSession();
+      return;
+    }
     this.question = {
       ...generated,
-      midi: pitchToMidi(generated.pitch),
+      midis: generated.pitches.map(pitchToMidi),
       shownAt: 0,
       attempts: 0,
       record: null,
@@ -252,37 +288,64 @@ export class App {
     this.question.shownAt = performance.now();
     $('#feedback').textContent = '';
     $('#feedback').className = '';
-    $('#key-name').textContent = generated.keyFifths !== 0 || s.keyKind !== 'none' ? keyLabel(generated.keyFifths) : '';
+    const keyText = generated.keyFifths !== 0 || s.keyKind !== 'none' ? keyLabel(generated.keyFifths) : '';
+    $('#key-name').textContent = [generated.shape ? shapeById(generated.shape)?.label : '', keyText].filter(Boolean).join('　');
     this.updateProgress();
   }
 
-  private renderQuestion(status: 'pending' | 'correct' | 'wrong', played?: Pitch): void {
+  /** pending=未回答、correct=全部正解、それ以外は判定結果に応じて色分け */
+  private renderQuestion(status: 'pending' | 'correct', result?: { missing: number[]; extra: Pitch[] }): void {
     const q = this.question!;
+    const chord = q.pitches.length > 1;
     this.staff.render({
       layout: this.settings.layout,
       clef: q.clef,
       keyFifths: q.keyFifths,
-      expected: q.pitch,
-      status,
-      played,
+      expected: q.pitches.map((pitch, i) => ({
+        pitch,
+        // 単音で間違えたときは期待音はそのまま黒。和音では押せた音を緑、足りない音を橙にする
+        state: status === 'correct' ? 'correct' : !result || !chord ? 'pending' : result.missing.includes(q.midis[i]) ? 'missing' : 'correct',
+      })),
+      extra: result?.extra,
     });
   }
 
   private handleNoteOn(ev: NoteEvent): void {
     const q = this.question;
     if (!this.running || this.advancing || !q) return;
+    if (q.midis.length === 1) {
+      this.submit([ev.note], ev.time);
+    } else if (ev.source === 'virtual') {
+      const p = (this.virtualPending ??= { notes: [], time: ev.time });
+      if (!p.notes.includes(ev.note)) p.notes.push(ev.note);
+      if (p.notes.length >= q.midis.length) {
+        this.virtualPending = null;
+        this.submit(p.notes, p.time);
+      }
+    } else {
+      this.grouper.push(ev);
+    }
+  }
+
+  /** 押した音（単音または和音）を判定する */
+  private submit(notes: number[], time: number): void {
+    const q = this.question;
+    if (!this.running || this.advancing || !q) return;
     const judgeOptions: JudgeOptions = { octaveEquivalent: this.settings.octaveEquivalent };
-    const result = judgeAttempt([q.midi], { notes: [ev.note], time: ev.time }, q.shownAt, judgeOptions);
-    const played = spellMidiInKey(ev.note, q.keyFifths, diatonicIndex(q.pitch));
+    const result = judgeAttempt(q.midis, { notes, time }, q.shownAt, judgeOptions);
+    const center = Math.round(q.pitches.reduce((sum, p) => sum + diatonicIndex(p), 0) / q.pitches.length);
+    const sorted = [...notes].sort((a, b) => a - b);
+    const played = sorted.map((n) => spellMidiInKey(n, q.keyFifths, center));
     q.attempts++;
     if (!q.record) {
       q.record = {
         timestamp: Date.now(),
-        mode: 'reflex',
+        mode: q.shape ? 'shape' : 'reflex',
+        ...(q.shape ? { shape: q.shape } : {}),
         clef: q.clef,
         keyFifths: q.keyFifths,
-        expected: [q.midi],
-        played: [ev.note],
+        expected: [...q.midis],
+        played: sorted,
         correct: result.isCorrect,
         reactionMs: result.reactionMs,
         attempts: 1,
@@ -304,12 +367,23 @@ export class App {
       this.persist(q);
       this.updateProgress();
       window.setTimeout(() => this.running && this.nextQuestion(), NEXT_DELAY_MS);
-    } else {
-      this.renderQuestion('wrong', played);
-      feedback.textContent = `押した音: ${pitchName(played)}`;
-      feedback.className = 'ng';
-      this.updateProgress();
+      return;
     }
+    const extra = played.filter((_, i) => result.extra.includes(sorted[i]));
+    this.renderQuestion('pending', { missing: result.missing, extra });
+    if (q.midis.length === 1) {
+      feedback.innerHTML = `押した音: ${names(played)}`;
+    } else {
+      const missing = q.pitches.filter((_, i) => result.missing.includes(q.midis[i]));
+      feedback.innerHTML = [
+        missing.length ? `<span class="missing">足りない音: ${names(missing)}</span>` : '',
+        extra.length ? `<span class="extra">余計な音: ${names(extra)}</span>` : '',
+      ]
+        .filter(Boolean)
+        .join('　');
+    }
+    feedback.className = 'ng';
+    this.updateProgress();
   }
 
   private finishSession(): void {
@@ -343,7 +417,8 @@ export class App {
     const rows = this.answered.map((q, i) => {
       const r = q.record!;
       const key = showKey ? `<td>${keyShort(q.keyFifths)}</td>` : '';
-      return `<tr class="${r.correct ? 'ok' : 'ng'}"><td>${i + 1}</td>${key}<td>${CLEF_LABELS[q.clef].slice(0, 2)}</td><td>${pitchName(q.pitch)}</td><td class="played">${r.correct ? '○' : pitchName(q.firstPlayed!)}</td><td>${formatMs(r.reactionMs)}</td><td>${r.attempts}</td></tr>`;
+      const shape = q.shape ? `<span class="shape-name">${shapeById(q.shape)?.label ?? ''}</span> ` : '';
+      return `<tr class="${r.correct ? 'ok' : 'ng'}"><td>${i + 1}</td>${key}<td>${CLEF_LABELS[q.clef].slice(0, 2)}</td><td>${shape}${names(q.pitches)}</td><td class="played">${r.correct ? '○' : names(q.firstPlayed!)}</td><td>${formatMs(r.reactionMs)}</td><td>${r.attempts}</td></tr>`;
     });
     $('#answers').innerHTML = rows.join('') || '<tr><td colspan="7">回答なし</td></tr>';
   }
@@ -404,6 +479,12 @@ export class App {
       .map((f) => `<option value="${f}">${keyLabel(f)}</option>`)
       .join('');
 
+    $('#shape-list').innerHTML = SHAPES.map(
+      (sh) => `<label class="check"><input type="checkbox" name="shape" value="${sh.id}" /> ${sh.label}</label>`,
+    ).join('');
+    form.querySelectorAll<HTMLInputElement>('input[name=shape]').forEach((el) => (el.checked = s.shapes.includes(el.value)));
+    $<HTMLInputElement>('#chord-window').value = String(s.chordWindowMs);
+    radio('mode').value = s.mode;
     radio('limitKind').value = s.limitKind;
     radio('layout').value = s.layout;
     radio('keyKind').value = s.keyKind;
@@ -423,7 +504,17 @@ export class App {
       };
       const layout = radio('layout').value as StaffLayout;
       const keyKind = radio('keyKind').value as Settings['keyKind'];
+      const checkedShapes = [...form.querySelectorAll<HTMLInputElement>('input[name=shape]:checked')].map((el) => el.value);
+      const mode: Mode = radio('mode').value === 'shape' ? 'shape' : 'reflex';
       this.settings = {
+        mode,
+        shapes: checkedShapes.length ? checkedShapes : DEFAULT_SHAPE_IDS,
+        chordWindowMs: clampInt(
+          $<HTMLInputElement>('#chord-window').value,
+          CHORD_WINDOW_RANGE.min,
+          CHORD_WINDOW_RANGE.max,
+          DEFAULT_CHORD_WINDOW_MS,
+        ),
         limitKind: radio('limitKind').value === 'time' ? 'time' : 'count',
         count: clampInt($<HTMLInputElement>('#count').value, 1, 500, DEFAULT_SETTINGS.count),
         seconds: clampInt($<HTMLInputElement>('#seconds').value, 10, 3600, DEFAULT_SETTINGS.seconds),
@@ -443,7 +534,10 @@ export class App {
       dim('#range-bass', layout === 'treble');
       dim('#key-fifths-label', keyKind !== 'fixed');
       dim('#key-max-label', keyKind !== 'random');
-      $('#mode-label').textContent = `反射モード・${LAYOUT_LABELS[layout]}`;
+      $('#mode-label').textContent = `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
+      $('#shape-settings').hidden = mode !== 'shape';
+      dim('#focus-weak-label', mode !== 'reflex');
+      this.grouper.setWindow(this.settings.chordWindowMs);
       saveSettings(this.settings);
     };
     form.addEventListener('input', () => {
@@ -453,6 +547,10 @@ export class App {
     form.addEventListener('submit', (e) => e.preventDefault());
     sync();
   }
+}
+
+function names(pitches: readonly Pitch[]): string {
+  return pitches.map(pitchName).join('・');
 }
 
 function keySetting(s: Settings): KeySetting {
@@ -513,5 +611,5 @@ function isFormControl(t: EventTarget | null): boolean {
 function readColors(): StaffColors {
   const css = getComputedStyle(document.documentElement);
   const v = (name: string) => css.getPropertyValue(name).trim();
-  return { ink: v('--ink'), correct: v('--correct'), wrong: v('--wrong') };
+  return { ink: v('--ink'), correct: v('--correct'), wrong: v('--wrong'), missing: v('--missing') };
 }

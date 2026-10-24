@@ -89,7 +89,7 @@ export function weightedPick<T>(items: readonly T[], weights: readonly number[],
   return items[items.length - 1];
 }
 
-function chooseKey(setting: KeySetting, rng: Rng): number {
+export function chooseKey(setting: KeySetting, rng: Rng): number {
   if (setting.kind === 'none') return 0;
   if (setting.kind === 'fixed') return setting.fifths;
   const max = Math.max(0, Math.min(7, setting.maxAccidentals));
@@ -97,7 +97,7 @@ function chooseKey(setting: KeySetting, rng: Rng): number {
 }
 
 /** 調号どおりの音から臨時記号で半音ずらした綴り（まれな綴りは除く） */
-function chromaticVariants(base: Pitch, fifths: number): Pitch[] {
+export function chromaticVariants(base: Pitch, fifths: number): Pitch[] {
   const inKey = keyAlter(fifths, base.step);
   const alters = inKey === 0 ? [-1, 1] : [0];
   return alters

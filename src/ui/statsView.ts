@@ -8,13 +8,16 @@ import {
   statKey,
   type NoteStat,
 } from '../stats/noteStats';
+import { SHAPES, shapeById } from '../generator/shape';
 import { summarize, type AnswerRecord } from '../stats/session';
+import { aggregateShapeStats } from '../stats/shapeStats';
 
 /** 誤答率の区切り。ヒートマップの色の段階（0〜4）に対応 */
 const MISS_BINS = [0, 0.1, 0.25, 0.5];
 const BIN_LABELS = ['0%', '〜10%', '〜25%', '〜50%', '50%〜'];
 const PITCH_CLASS_LABELS = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const WEAK_LIST_SIZE = 10;
+const SHAPE_IDS = SHAPES.map((s) => s.id);
 
 export function missBin(accuracy: number): number {
   const miss = 1 - accuracy;
@@ -27,7 +30,8 @@ export function missBin(accuracy: number): number {
 export function renderStats(container: HTMLElement, records: readonly AnswerRecord[]): void {
   const stats = aggregateNoteStats(records);
   const overall = overallAvgCorrectMs(stats.values());
-  const all = summarize(records.filter((r) => r.expected.length === 1));
+  const all = summarize(records);
+  const shapeStats = aggregateShapeStats(records);
 
   const tiles = `
     <div class="summary">
@@ -36,8 +40,29 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
       <div class="stat"><span class="label">正解時の平均反応</span><span class="value">${fmtMs(all.avgCorrectReactionMs)}</span><span class="sub">全期間</span></div>
     </div>`;
 
-  if (!stats.size) {
+  if (!stats.size && !shapeStats.length) {
     container.innerHTML = `${tiles}<p class="empty">まだ記録がありません。練習すると、音ごとの正答率と反応時間がここに出ます。</p>`;
+    return;
+  }
+
+  const shapeOrder = (id: string) => SHAPE_IDS.indexOf(id);
+  const shapeSection = shapeStats.length
+    ? `<h3>形ごとの正答率（形で読むモード）</h3>
+    <p class="note-text">各形の直近${RECENT_WINDOW}回で計算。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>形</th><th class="num">直近の回答</th><th class="num">正答率</th><th class="num">正解時の反応</th><th class="num">全回答</th></tr></thead>
+        <tbody>${[...shapeStats]
+          .sort((a, b) => shapeOrder(a.shape) - shapeOrder(b.shape))
+          .map(
+            (x) => `<tr><td class="note">${shapeById(x.shape)?.label ?? x.shape}</td><td class="num">${x.count}</td><td class="num">${Math.round(x.accuracy * 100)}%</td><td class="num">${fmtMs(x.avgCorrectReactionMs)}</td><td class="num">${x.totalCount}</td></tr>`,
+          )
+          .join('')}</tbody>
+      </table>
+    </div>`
+    : '';
+  if (!stats.size) {
+    container.innerHTML = `${tiles}${shapeSection}`;
     return;
   }
 
@@ -64,7 +89,7 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
     .join('');
 
   container.innerHTML = `${tiles}
-    <h3>音ごとの正答率</h3>
+    <h3>音ごとの正答率（反射モード）</h3>
     <p class="note-text">凡例の右側の色ほど間違えやすい音です（各音の直近${RECENT_WINDOW}回で計算。「遅」は正解時の反応が全体平均より3割以上遅い音）。マスにカーソルを合わせると詳細が出ます。</p>
     <div class="heat-legend" aria-label="凡例">
       <span>誤答率</span>
@@ -79,7 +104,8 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
         <thead><tr><th>段</th><th>音</th><th class="num">直近の回答</th><th class="num">正答率</th><th class="num">正解時の反応</th><th>よく押し間違える音</th><th class="num">出やすさ</th></tr></thead>
         <tbody>${weakRows}</tbody>
       </table>
-    </div>`;
+    </div>
+    ${shapeSection}`;
 
   attachTooltip(container, stats, overall);
 }

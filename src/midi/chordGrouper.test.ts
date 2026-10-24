@@ -46,3 +46,20 @@ describe('ChordGrouper', () => {
     expect(chords).toHaveLength(1);
   });
 });
+
+describe('ChordGrouper.reset', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('まとめ途中の音を捨て、判定に回さない', () => {
+    const chords: Chord[] = [];
+    const g = new ChordGrouper(80, (c) => chords.push(c));
+    g.push(on(60, 0));
+    g.reset();
+    vi.advanceTimersByTime(200);
+    expect(chords).toEqual([]);
+    g.push(on(64, 300));
+    vi.advanceTimersByTime(80);
+    expect(chords).toEqual([{ notes: [64], time: 300 }]);
+  });
+});

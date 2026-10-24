@@ -45,6 +45,13 @@ export class ChordGrouper {
     }
   }
 
+  /** まとめ途中の音を判定に回さずに捨てる（問題が切り替わったとき用） */
+  reset(): void {
+    if (this.timer !== null) this.timers.clear(this.timer);
+    this.timer = null;
+    this.pending = null;
+  }
+
   flush(): void {
     if (this.timer !== null) this.timers.clear(this.timer);
     this.timer = null;

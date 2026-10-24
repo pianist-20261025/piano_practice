@@ -1,11 +1,14 @@
 import type { Clef } from '../music/clef';
 
-export type Mode = 'reflex';
+/** reflex=反射モード（単音）、shape=形で読むモード（音程・和音） */
+export type Mode = 'reflex' | 'shape';
 
 /** 1問ごとの記録。正誤と反応時間は最初の押鍵で決める。 */
 export interface AnswerRecord {
   timestamp: number;
   mode: Mode;
+  /** 形で読むモードの形の id（3rd, triad-root など） */
+  shape?: string;
   clef: Clef;
   /** 調号（♯の数は正、♭の数は負） */
   keyFifths: number;

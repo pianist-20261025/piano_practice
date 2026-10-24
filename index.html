@@ -16,6 +16,17 @@
       <section id="setup" class="panel" hidden>
         <form id="settings">
           <fieldset>
+            <legend>練習モード</legend>
+            <label class="radio"><input type="radio" name="mode" value="reflex" /> 反射モード（単音）</label>
+            <label class="radio"><input type="radio" name="mode" value="shape" /> 形で読むモード（音程・和音）</label>
+          </fieldset>
+          <fieldset id="shape-settings" hidden>
+            <legend>出題する形</legend>
+            <div id="shape-list" class="row"></div>
+            <label>和音とみなす時間差 <input id="chord-window" type="number" min="30" max="150" step="10" /> ms
+              <span class="hint-inline">（最初の音からこの時間内に押した音を1つの和音として判定）</span></label>
+          </fieldset>
+          <fieldset>
             <legend>譜表</legend>
             <label class="radio"><input type="radio" name="layout" value="treble" /> ト音記号</label>
             <label class="radio"><input type="radio" name="layout" value="bass" /> ヘ音記号</label>
@@ -70,7 +81,7 @@
               <label id="seconds-label">制限時間 <input id="seconds" type="number" min="10" max="3600" step="10" /> 秒</label>
             </div>
             <label class="check"><input id="octave-eq" type="checkbox" /> オクターブ違いを正解とみなす</label>
-            <label class="check"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
+            <label id="focus-weak-label" class="check"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
           </fieldset>
         </form>
         <div class="actions">
