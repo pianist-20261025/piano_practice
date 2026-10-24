@@ -9,6 +9,7 @@
     <header>
       <h1>読譜トレーニング <span id="mode-label" class="mode">反射モード</span></h1>
       <div id="midi-status" class="midi-status">MIDI を確認中…</div>
+      <div id="storage-warning" class="storage-warning" hidden></div>
     </header>
 
     <main>
@@ -69,9 +70,14 @@
               <label id="seconds-label">制限時間 <input id="seconds" type="number" min="10" max="3600" step="10" /> 秒</label>
             </div>
             <label class="check"><input id="octave-eq" type="checkbox" /> オクターブ違いを正解とみなす</label>
+            <label class="check"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
           </fieldset>
         </form>
-        <button id="start" class="primary">はじめる <kbd>Enter</kbd></button>
+        <div class="actions">
+          <button id="start" class="primary">はじめる <kbd>Enter</kbd></button>
+          <button id="show-stats">統計を見る</button>
+          <span id="history-count" class="hint-inline"></span>
+        </div>
       </section>
 
       <section id="practice" class="panel" hidden>
@@ -99,6 +105,21 @@
         <div class="actions">
           <button id="again" class="primary">もう一度</button>
           <button id="back">設定に戻る</button>
+          <button id="result-stats">統計を見る</button>
+        </div>
+      </section>
+
+      <section id="stats" class="panel" hidden>
+        <div class="stats-head">
+          <h2>統計</h2>
+          <button id="stats-back">戻る</button>
+        </div>
+        <div id="stats-body"></div>
+        <div class="data-actions">
+          <span class="hint-inline">記録はこのPCのこのブラウザの中だけに保存されます。</span>
+          <button id="export-records">記録を書き出す（JSON）</button>
+          <label class="file-button">記録を読み込む<input id="import-records" type="file" accept="application/json,.json" hidden /></label>
+          <button id="clear-records" class="danger">記録をすべて消す</button>
         </div>
       </section>
     </main>

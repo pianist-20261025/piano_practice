@@ -9,7 +9,17 @@ import { CLEFS, CLEF_LABELS, ledgerLinesAt, staffRange, type Clef } from '../mus
 import { KEY_FIFTHS_RANGE, keyLabel, spellMidiInKey } from '../music/key';
 import { diatonicIndex, pitchFromDiatonic, pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type StaffColors, type StaffLayout } from '../render/staffRenderer';
+import { makeWeightFn } from '../stats/noteStats';
 import { summarize, type AnswerRecord } from '../stats/session';
+import {
+  IndexedDbRecordStore,
+  MemoryRecordStore,
+  exportRecords,
+  newRecordsOnly,
+  parseExportedRecords,
+  type RecordStore,
+} from '../stats/store';
+import { renderStats } from './statsView';
 
 interface Settings {
   limitKind: 'count' | 'time';
@@ -22,6 +32,8 @@ interface Settings {
   keyMaxAccidentals: number;
   accidentals: boolean;
   octaveEquivalent: boolean;
+  /** 苦手な音を多めに出す */
+  focusWeak: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -35,6 +47,7 @@ const DEFAULT_SETTINGS: Settings = {
   keyMaxAccidentals: 4,
   accidentals: false,
   octaveEquivalent: false,
+  focusWeak: true,
 };
 const SETTINGS_KEY = 'sight-reader:settings';
 /** 音域の選択肢として出す加線の最大本数 */
@@ -51,7 +64,11 @@ interface Question extends SingleNoteQuestion {
   record: AnswerRecord | null;
   /** 最初に押した音（譜面上の綴り） */
   firstPlayed: Pitch | null;
+  saved: boolean;
 }
+
+type View = 'setup' | 'practice' | 'result' | 'stats';
+const VIEWS: readonly View[] = ['setup', 'practice', 'result', 'stats'];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -67,6 +84,11 @@ export class App {
   private tickTimer: number | undefined;
   private staff = new StaffRenderer($('#staff'), readColors);
   private keyboard!: VirtualKeyboard;
+  private store: RecordStore = new IndexedDbRecordStore();
+  /** 保存済みの全記録（苦手音の重み付けと統計に使う） */
+  private history: AnswerRecord[] = [];
+  private view: View = 'setup';
+  private viewBeforeStats: View = 'setup';
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -89,8 +111,90 @@ export class App {
       if (e.code === 'Enter' && !this.running && !isFormControl(e.target)) this.startSession();
       if (e.code === 'Escape' && this.running) this.finishSession();
     });
+    $('#show-stats').addEventListener('click', () => this.openStats());
+    $('#result-stats').addEventListener('click', () => this.openStats());
+    $('#stats-back').addEventListener('click', () => this.showView(this.viewBeforeStats));
+    $('#export-records').addEventListener('click', () => this.exportHistory());
+    $<HTMLInputElement>('#import-records').addEventListener('change', (e) => this.importHistory(e.target as HTMLInputElement));
+    $('#clear-records').addEventListener('click', () => this.clearHistory());
     this.showView('setup');
     this.scrollKeyboardToRange();
+    this.loadHistory();
+  }
+
+  // ---- 記録 ----
+
+  private async loadHistory(): Promise<void> {
+    try {
+      this.history = await this.store.all();
+    } catch (e) {
+      console.error(e);
+      this.store = new MemoryRecordStore();
+      this.showStorageWarning('記録を保存できません（このブラウザでは IndexedDB が使えないため、記録はタブを閉じると消えます）');
+    }
+    this.updateHistoryCount();
+  }
+
+  /** 1問ぶんの記録を保存する。やり直しの回数を含めたいので、正解したとき（または終了時）に保存する */
+  private persist(q: Question): void {
+    if (!q.record || q.saved) return;
+    q.saved = true;
+    const record = { ...q.record };
+    this.history.push(record);
+    this.updateHistoryCount();
+    this.store.add(record).catch((e) => {
+      console.error(e);
+      this.showStorageWarning('記録の保存に失敗しました');
+    });
+  }
+
+  private updateHistoryCount(): void {
+    $('#history-count').textContent = this.history.length ? `これまでの記録 ${this.history.length} 問` : 'まだ記録はありません';
+  }
+
+  private showStorageWarning(message: string): void {
+    const el = $('#storage-warning');
+    el.textContent = message;
+    el.hidden = false;
+  }
+
+  private openStats(): void {
+    if (this.view !== 'stats') this.viewBeforeStats = this.view;
+    renderStats($('#stats-body'), this.history);
+    this.showView('stats');
+  }
+
+  private exportHistory(): void {
+    const blob = new Blob([exportRecords(this.history)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `sight-reader-records-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  private async importHistory(input: HTMLInputElement): Promise<void> {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      const incoming = newRecordsOnly(this.history, parseExportedRecords(await file.text()));
+      await this.store.addMany(incoming);
+      this.history.push(...incoming);
+      this.updateHistoryCount();
+      renderStats($('#stats-body'), this.history);
+      alert(`${incoming.length} 問ぶんの記録を読み込みました`);
+    } catch (e) {
+      alert(`読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  private async clearHistory(): Promise<void> {
+    if (!confirm(`これまでの記録 ${this.history.length} 問をすべて消します。元に戻せません。よろしいですか？`)) return;
+    await this.store.clear();
+    this.history = [];
+    this.updateHistoryCount();
+    renderStats($('#stats-body'), this.history);
   }
 
   // ---- セッション ----
@@ -130,6 +234,7 @@ export class App {
         ranges: s.ranges,
         key: keySetting(s),
         accidentals: s.accidentals,
+        weight: s.focusWeak ? makeWeightFn(this.history) : undefined,
       },
       Math.random,
       this.question ?? undefined,
@@ -141,6 +246,7 @@ export class App {
       attempts: 0,
       record: null,
       firstPlayed: null,
+      saved: false,
     };
     this.renderQuestion('pending');
     this.question.shownAt = performance.now();
@@ -195,6 +301,7 @@ export class App {
       feedback.textContent = q.attempts === 1 ? '正解' : '正解（やり直し）';
       feedback.className = 'ok';
       this.advancing = true;
+      this.persist(q);
       this.updateProgress();
       window.setTimeout(() => this.running && this.nextQuestion(), NEXT_DELAY_MS);
     } else {
@@ -209,6 +316,7 @@ export class App {
     if (!this.running) return;
     this.running = false;
     window.clearInterval(this.tickTimer);
+    if (this.question) this.persist(this.question);
     this.renderResult();
     this.showView('result');
   }
@@ -240,8 +348,9 @@ export class App {
     $('#answers').innerHTML = rows.join('') || '<tr><td colspan="7">回答なし</td></tr>';
   }
 
-  private showView(view: 'setup' | 'practice' | 'result'): void {
-    for (const v of ['setup', 'practice', 'result']) $(`#${v}`).hidden = v !== view;
+  private showView(view: View): void {
+    this.view = view;
+    for (const v of VIEWS) $(`#${v}`).hidden = v !== view;
   }
 
   private scrollKeyboardToRange(): void {
@@ -304,6 +413,7 @@ export class App {
     $<HTMLSelectElement>('#key-max').value = String(s.keyMaxAccidentals);
     $<HTMLInputElement>('#accidentals').checked = s.accidentals;
     $<HTMLInputElement>('#octave-eq').checked = s.octaveEquivalent;
+    $<HTMLInputElement>('#focus-weak').checked = s.focusWeak;
 
     const sync = () => {
       const range = (clef: Clef): DiatonicRange => {
@@ -324,6 +434,7 @@ export class App {
         keyMaxAccidentals: clampInt($<HTMLSelectElement>('#key-max').value, 1, 7, DEFAULT_SETTINGS.keyMaxAccidentals),
         accidentals: $<HTMLInputElement>('#accidentals').checked,
         octaveEquivalent: $<HTMLInputElement>('#octave-eq').checked,
+        focusWeak: $<HTMLInputElement>('#focus-weak').checked,
       };
       const dim = (sel: string, off: boolean) => $(sel).classList.toggle('dim', off);
       dim('#count-label', this.settings.limitKind !== 'count');

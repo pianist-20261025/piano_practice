@@ -23,6 +23,8 @@ export interface SingleNoteOptions {
   accidentals: boolean;
   /** 臨時記号を付ける確率（accidentals が true のとき） */
   accidentalRate?: number;
+  /** 音ごとの出題の重み（苦手な音ほど大きく）。なければ均等 */
+  weight?: (clef: Clef, midi: number) => number;
 }
 
 export interface SingleNoteQuestion {
@@ -64,14 +66,27 @@ export function generateSingleNote(options: SingleNoteOptions, rng: Rng, previou
       .flat()
       .filter((p) => allowRepeat || pitchToMidi(p) !== previousMidi);
     if (candidates.length) {
-      // 位置ごとの偏りが出ないよう、まず位置を選んでから綴りを選ぶ
-      const byPosition = new Map<number, Pitch[]>();
-      for (const p of candidates) byPosition.set(diatonicIndex(p), [...(byPosition.get(diatonicIndex(p)) ?? []), p]);
-      const pitch = pick(pick([...byPosition.values()], rng), rng);
-      return { clef, keyFifths, pitch };
+      // 綴りの候補数で位置ごとの出やすさが偏らないよう、位置ごとに重みを候補数で割る
+      const perPosition = new Map<number, number>();
+      for (const p of candidates) perPosition.set(diatonicIndex(p), (perPosition.get(diatonicIndex(p)) ?? 0) + 1);
+      const weights = candidates.map(
+        (p) => (options.weight?.(clef, pitchToMidi(p)) ?? 1) / perPosition.get(diatonicIndex(p))!,
+      );
+      return { clef, keyFifths, pitch: weightedPick(candidates, weights, rng) };
     }
   }
   throw new Error('音域が空です');
+}
+
+export function weightedPick<T>(items: readonly T[], weights: readonly number[], rng: Rng): T {
+  const total = weights.reduce((a, b) => a + Math.max(0, b), 0);
+  if (!(total > 0)) return pick(items, rng);
+  let r = rng() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= Math.max(0, weights[i]);
+    if (r < 0) return items[i];
+  }
+  return items[items.length - 1];
 }
 
 function chooseKey(setting: KeySetting, rng: Rng): number {

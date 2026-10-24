@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { staffRange, type Clef } from '../music/clef';
 import { keyAlter } from '../music/key';
 import { diatonicIndex, pitchToMidi } from '../music/pitch';
-import { generateSingleNote, type SingleNoteOptions } from './singleNote';
+import { generateSingleNote, weightedPick, type SingleNoteOptions } from './singleNote';
 
 function seeded(seed: number) {
   return () => {
@@ -105,5 +105,29 @@ describe('generateSingleNote: 調号・臨時記号', () => {
     const qs = many({ ...base, accidentals: true, accidentalRate: 1 }, 1000);
     const names = new Set(qs.map((q) => `${q.pitch.step}${q.pitch.alter}`));
     for (const rare of ['E1', 'B1', 'F-1', 'C-1']) expect(names.has(rare)).toBe(false);
+  });
+});
+
+describe('generateSingleNote: 苦手音の重み付け', () => {
+  it('重い音ほど多く出る', () => {
+    const g4 = 67;
+    const qs = many({ ...base, weight: (_clef, midi) => (midi === g4 ? 10 : 1) }, 2000);
+    const share = qs.filter((q) => pitchToMidi(q.pitch) === g4).length / qs.length;
+    // 均等なら 1/15。重み10なら約 10/24（直前と同じ音は避けるので実際はそれより少し下がる）
+    expect(share).toBeGreaterThan(0.25);
+  });
+
+  it('重みが全部同じなら均等とほぼ同じ', () => {
+    const qs = many({ ...base, weight: () => 3 }, 3000);
+    const counts = new Map<number, number>();
+    for (const q of qs) counts.set(diatonicIndex(q.pitch), (counts.get(diatonicIndex(q.pitch)) ?? 0) + 1);
+    for (const c of counts.values()) expect(c).toBeGreaterThan(3000 / 15 / 2);
+  });
+});
+
+describe('weightedPick', () => {
+  it('重み0の要素は選ばない。全部0なら均等', () => {
+    expect(weightedPick(['a', 'b'], [0, 1], () => 0)).toBe('b');
+    expect(weightedPick(['a', 'b'], [0, 0], () => 0.6)).toBe('b');
   });
 });
