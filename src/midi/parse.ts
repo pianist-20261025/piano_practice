@@ -13,3 +13,9 @@ export function parseMidiMessage(data: ArrayLike<number>, time: number): NoteEve
   if (kind === 0x80 || kind === 0x90) return { type: 'off', note, velocity: 0, time, source: 'midi' };
   return null;
 }
+
+/** ダンパーペダル（コントロールチェンジ 64）。値 64 以上で踏み込み。ペダル以外は null */
+export function parseSustainPedal(data: ArrayLike<number>): boolean | null {
+  if (data.length < 3 || (data[0] & 0xf0) !== 0xb0 || (data[1] & 0x7f) !== 64) return null;
+  return (data[2] & 0x7f) >= 64;
+}

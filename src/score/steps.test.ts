@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSteps, type RawEntry, type RawNote } from './steps';
 
 const n = (midi: number, hand: 'right' | 'left' = 'right', extra: Partial<RawNote> = {}): RawNote => ({
-  midi, hand, rest: false, grace: false, tieContinuation: false, ...extra,
+  midi, hand, rest: false, grace: false, tieContinuation: false, duration: 1, ...extra,
 });
 let idx = 0;
 const e = (time: number, notes: RawNote[], measureIndex = Math.floor(time / 3)): RawEntry => ({
@@ -42,5 +42,37 @@ describe('buildSteps', () => {
 
   it('同じ鍵盤が2声で重なったら1回だけ判定する', () => {
     expect(buildSteps([e(0, [n(67), n(67)])])[0].notes).toHaveLength(1);
+  });
+});
+
+describe('buildSteps: 同じ音の持続', () => {
+  const sustainedOf = (steps: ReturnType<typeof buildSteps>) => steps.map((s) => s.notes.filter((n) => n.sustained).map((n) => n.midi));
+
+  it('別の声部の長い音が鳴っている高さに書かれた音は sustained（押さえたままでよい）', () => {
+    // 声部1: C4 の2分音符、声部2: 2拍目に同じ C4
+    const steps = buildSteps([e(0, [n(60, 'left', { duration: 2 }), n(64)]), e(1, [n(60, 'left'), n(67)])]);
+    expect(sustainedOf(steps)).toEqual([[], [60]]);
+  });
+
+  it('タイが続いている位置で、別の声部が同じ高さを書いた音も sustained', () => {
+    const steps = buildSteps([e(0, [n(67)]), e(1, [n(67, 'right', { tieContinuation: true }), n(67, 'left'), n(48, 'left')])]);
+    expect(steps[1].notes.map((x) => x.midi)).toEqual([48, 67]);
+    expect(sustainedOf(steps)).toEqual([[], [67]]);
+  });
+
+  it('前の音が終わってから同じ高さを弾く（ふつうの連打）は sustained にしない', () => {
+    const steps = buildSteps([e(0, [n(67)]), e(1, [n(67, 'right', { duration: 0.5 })]), e(1.5, [n(67, 'right', { duration: 0.5 })]), e(2, [n(67)])]);
+    expect(sustainedOf(steps)).toEqual([[], [], [], []]);
+  });
+
+  it('タイでつながった長い音のあとに同じ高さを弾き直すのも、ふつうの連打', () => {
+    const steps = buildSteps([e(0, [n(60)]), e(1, [n(60, 'right', { tieContinuation: true })]), e(2, [n(60)])]);
+    expect(steps.map((s) => s.time)).toEqual([0, 2]);
+    expect(sustainedOf(steps)).toEqual([[], []]);
+  });
+
+  it('装飾音は持続に数えない', () => {
+    const steps = buildSteps([e(0, [n(62, 'right', { grace: true, duration: 0 }), n(60)]), e(1, [n(62)])]);
+    expect(sustainedOf(steps)).toEqual([[], []]);
   });
 });

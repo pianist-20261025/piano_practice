@@ -54,6 +54,16 @@ export class TimedMatcher {
     return { kind: 'extra', step: this.nearestStep(time) };
   }
 
+  /**
+   * 押鍵なしで当たりにする（押さえたままの鍵盤がその音のとき）。ずれは測れないので null のまま
+   * （タイミングの集計には入らない）
+   */
+  credit(target: number): boolean {
+    if (this.results[target]?.hit !== false) return false;
+    this.results[target] = { hit: true, deviationMs: null };
+    return true;
+  }
+
   /** now の時点で押す時間を過ぎた（もう押しても間に合わない）目標の番号。各目標は1回だけ返す */
   expire(now: number): number[] {
     const out: number[] = [];

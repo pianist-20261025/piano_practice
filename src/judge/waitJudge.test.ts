@@ -36,3 +36,20 @@ describe('WaitStepJudge', () => {
     expect(j.press(60)).toBe('repeat');
   });
 });
+
+describe('WaitStepJudge.credit', () => {
+  it('押さえたままの音を押鍵なしで弾けたことにする', () => {
+    const j = new WaitStepJudge([60, 64]);
+    expect(j.credit(60)).toBe(true);
+    expect(j.press(64)).toBe('hit');
+    expect(j.done).toBe(true);
+    expect(j.extras).toEqual([]);
+  });
+
+  it('期待音でない音や、すでに弾けた音は何もしない', () => {
+    const j = new WaitStepJudge([60]);
+    expect(j.credit(62)).toBe(false);
+    j.press(60);
+    expect(j.credit(60)).toBe(false);
+  });
+});

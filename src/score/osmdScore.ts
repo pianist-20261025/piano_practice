@@ -67,6 +67,8 @@ export class OsmdScore {
             rest: note.isRest(),
             grace: ve.IsGrace,
             tieContinuation: !!tie && tie.StartNote !== note,
+            // 書かれた長さ（4分音符単位）。装飾音は時間を取らない
+            duration: ve.IsGrace ? 0 : note.Length.RealValue * 4,
           });
         }
       }

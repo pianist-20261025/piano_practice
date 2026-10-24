@@ -11,6 +11,8 @@ export interface RawNote {
   grace: boolean;
   /** タイでつながった後ろ側の音（押し直し不要） */
   tieContinuation: boolean;
+  /** 書かれた長さ（4分音符単位）。タイの後ろ側はその音符ぶんだけ */
+  duration: number;
 }
 
 /** カーソル位置1つぶん。index は先頭から何番目のカーソル位置か */
@@ -30,6 +32,11 @@ export interface StepNote {
   hand: Hand;
   /** RawEntry.notes の何番目か（色付けで使う） */
   rawIndex: number;
+  /**
+   * 同じ高さの音がまだ鳴っている（別の声部の長い音やタイが続いている）ところに書かれた音。
+   * ピアノでは鍵盤を押したままのことが多く、押し直しが起きないので、押さえたままなら弾けたとみなす
+   */
+  sustained: boolean;
 }
 
 export interface Step {
@@ -52,16 +59,27 @@ export interface Step {
 export function buildSteps(entries: readonly RawEntry[], hands: HandSetting = 'both'): Step[] {
   const steps: Step[] = [];
   let lastTime = -Infinity;
+  /** これまでに鳴り始めた音の、鳴っている区間（両手とも。片手モードでも楽譜上の持続は同じ） */
+  let sounding: { midi: number; start: number; end: number }[] = [];
   for (const entry of entries) {
     if (entry.time <= lastTime) continue;
     lastTime = entry.time;
+    const t = entry.time;
+    sounding = sounding.filter((s) => s.end > t);
+    // この位置より前から鳴り続けている音、またはこの位置でタイが続いている音
+    const held = new Set(sounding.filter((s) => s.start < t).map((s) => s.midi));
+    for (const n of entry.notes) if (n.tieContinuation && !n.rest) held.add(n.midi);
+
     const notes: StepNote[] = [];
     entry.notes.forEach((n, rawIndex) => {
       if (n.rest || n.grace || n.tieContinuation) return;
       if (hands !== 'both' && n.hand !== hands) return;
       if (notes.some((x) => x.midi === n.midi)) return;
-      notes.push({ midi: n.midi, hand: n.hand, rawIndex });
+      notes.push({ midi: n.midi, hand: n.hand, rawIndex, sustained: held.has(n.midi) });
     });
+    for (const n of entry.notes) {
+      if (!n.rest && !n.grace && n.duration > 0) sounding.push({ midi: n.midi, start: t, end: t + n.duration });
+    }
     if (!notes.length) continue;
     notes.sort((a, b) => a.midi - b.midi);
     steps.push({ entryIndex: entry.index, measureIndex: entry.measureIndex, measureNumber: entry.measureNumber, time: entry.time, notes });

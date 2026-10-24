@@ -44,6 +44,18 @@ describe('TimedMatcher', () => {
   });
 });
 
+describe('TimedMatcher.credit', () => {
+  it('押さえたままの音を当たりにする（ずれは null）。期限切れにも数えない', () => {
+    const m = new TimedMatcher(targets, 100);
+    expect(m.credit(2)).toBe(true);
+    expect(m.result(2)).toEqual({ hit: true, deviationMs: null });
+    expect(m.credit(2)).toBe(false);
+    expect(m.expire(5000)).toEqual([0, 1, 3]);
+    // 当たりにした目標には、もう押鍵を結び付けない
+    expect(m.press(62, 1500).kind).toBe('extra');
+  });
+});
+
 describe('summarizeTiming', () => {
   it('許容幅に入った割合と平均のずれ', () => {
     const s = summarizeTiming([-50, 20, 150, 80], 100);

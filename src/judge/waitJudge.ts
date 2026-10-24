@@ -32,6 +32,16 @@ export class WaitStepJudge {
     return 'hit';
   }
 
+  /**
+   * 押鍵なしで弾けたことにする（押さえたままの鍵盤がその音のとき）。期待音でなければ何もしない。
+   * 押し直しは起きないので、余計な音にも数えない
+   */
+  credit(midi: number): boolean {
+    if (!this.expected.includes(midi) || this.hit.has(midi)) return false;
+    this.hit.add(midi);
+    return true;
+  }
+
   get done(): boolean {
     return this.hit.size === this.expected.length;
   }

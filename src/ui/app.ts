@@ -166,7 +166,7 @@ export class App {
     const pc = new PcKeyboardInput(this.hub.emit, (base) => this.showOctave(base));
     pc.attach();
     this.showOctave(pc.base);
-    new MidiInput(this.hub.emit, (s) => this.showMidiStatus(s)).start();
+    new MidiInput(this.hub.emit, (s) => this.showMidiStatus(s), this.hub.setPedal).start();
 
     this.hub.subscribe((ev) => {
       this.keyboard.setHeld(ev.note, ev.type === 'on');
@@ -176,6 +176,7 @@ export class App {
     this.song = new SongPractice($('#score'), $('#song-staff'), {
       persist: (record) => this.persistRecord(record),
       finished: (result) => this.finishSong(result),
+      sounding: () => this.hub.soundingNotes(),
       colors: readColors,
       status: (text) => ($('#song-progress').textContent = text),
       feedback: (html, kind) => {

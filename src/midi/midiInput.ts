@@ -1,4 +1,4 @@
-import { parseMidiMessage } from './parse';
+import { parseMidiMessage, parseSustainPedal } from './parse';
 import type { NoteListener } from './types';
 
 export type MidiStatus =
@@ -13,6 +13,7 @@ export class MidiInput {
   constructor(
     private readonly onNote: NoteListener,
     private readonly onStatus: (status: MidiStatus) => void,
+    private readonly onPedal: (down: boolean) => void = () => {},
   ) {}
 
   async start(): Promise<void> {
@@ -39,6 +40,8 @@ export class MidiInput {
         if (!e.data) return;
         const ev = parseMidiMessage(e.data, e.timeStamp);
         if (ev) this.onNote(ev);
+        const pedal = parseSustainPedal(e.data);
+        if (pedal !== null) this.onPedal(pedal);
       };
       if (input.state === 'connected') devices.push(input.name ?? '不明なデバイス');
     });

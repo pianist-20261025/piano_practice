@@ -1,14 +1,31 @@
 import type { NoteEvent, NoteListener } from '../midi/types';
 
-/** 全入力元のノートイベントを1か所に集める。押下中の音も追跡する。 */
+/**
+ * 全入力元のノートイベントを1か所に集める。押下中の音と、ダンパーペダルで伸びている音も追跡する
+ * （曲モードで「同じ音が鳴り続けている」かを判断するため。ペダル自体は判定しない）。
+ */
 export class InputHub {
   private listeners = new Set<NoteListener>();
   private held = new Set<number>();
+  private pedalDown = false;
+  /** 鍵盤は離したが、ペダルで鳴り続けている音 */
+  private pedalSustained = new Set<number>();
 
   emit = (ev: NoteEvent): void => {
-    if (ev.type === 'on') this.held.add(ev.note);
-    else this.held.delete(ev.note);
+    if (ev.type === 'on') {
+      this.held.add(ev.note);
+      this.pedalSustained.delete(ev.note);
+    } else {
+      this.held.delete(ev.note);
+      if (this.pedalDown) this.pedalSustained.add(ev.note);
+    }
     this.listeners.forEach((fn) => fn(ev));
+  };
+
+  /** ダンパーペダルの踏み込み・解放 */
+  setPedal = (down: boolean): void => {
+    this.pedalDown = down;
+    if (!down) this.pedalSustained.clear();
   };
 
   subscribe(fn: NoteListener): () => void {
@@ -18,5 +35,10 @@ export class InputHub {
 
   heldNotes(): number[] {
     return [...this.held].sort((a, b) => a - b);
+  }
+
+  /** いま鳴っている音（押さえている鍵盤＋ペダルで伸びている音） */
+  soundingNotes(): number[] {
+    return [...new Set([...this.held, ...this.pedalSustained])].sort((a, b) => a - b);
   }
 }

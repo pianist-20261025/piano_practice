@@ -52,6 +52,8 @@ interface Callbacks {
   persist(record: AnswerRecord): void;
   finished(result: SongResult): void;
   colors(): StaffColors;
+  /** いま鳴っている音（押さえている鍵盤＋ペダルで伸びている音） */
+  sounding(): number[];
   /** 進行状況の表示 */
   status(text: string): void;
   feedback(html: string, kind: 'ok' | 'ng' | ''): void;
@@ -81,6 +83,8 @@ export class SongPractice {
   /** targets の番号 → (ステップ, そのステップの何番目の音) */
   private targetOf: { step: number; note: number }[] = [];
   private stepExtras: number[][] = [];
+  /** creditSustained で見始める目標の番号 */
+  private creditFrom = 0;
   private finalized = 0;
   private cursorAt = -1;
   private beatMs = 0;
@@ -147,22 +151,48 @@ export class SongPractice {
   // ---- 待機モード ----
 
   private startWait(): void {
-    this.showWaitStep(0);
+    this.showWaitStep(0, []);
   }
 
-  private showWaitStep(i: number): void {
-    this.current = i;
-    const step = this.steps[i];
-    this.score.moveCursor(step.entryIndex);
-    this.waitJudge = new WaitStepJudge(
-      step.notes.map((n) => n.midi),
-      this.settings!.judge,
-    );
-    this.shownAt = performance.now();
-    this.firstPressAt = null;
-    this.renderMini(step, () => 'pending', []);
-    this.cb.status(this.progressText(i));
-    this.cb.feedback('', '');
+  /**
+   * i 番目のステップを出す。次の音はすでに鳴っていることがあるので、その分は押鍵なしで弾けたことにする:
+   * - 楽譜上、同じ高さの音がまだ鳴っている（sustained）位置で、その音が鳴り続けている（押さえたまま／ペダル）
+   * - 前のステップで先に押してしまった（early）音を、まだ押さえている
+   * すべて済んでいれば、そのまま次へ進む。
+   */
+  private showWaitStep(i: number, early: readonly number[]): void {
+    for (;;) {
+      this.current = i;
+      const step = this.steps[i];
+      this.score.moveCursor(step.entryIndex);
+      this.waitJudge = new WaitStepJudge(
+        step.notes.map((n) => n.midi),
+        this.settings!.judge,
+      );
+      this.shownAt = performance.now();
+      this.firstPressAt = null;
+      const sounding = new Set(this.cb.sounding());
+      for (const n of step.notes) {
+        if (sounding.has(n.midi) && (n.sustained || early.includes(n.midi)) && this.waitJudge.credit(n.midi)) {
+          this.score.colorNote(step.entryIndex, n.rawIndex, this.cb.colors().correct);
+        }
+      }
+      this.cb.status(this.progressText(i));
+      this.cb.feedback('', '');
+      if (!this.waitJudge.done) {
+        const hits = new Set(this.waitJudge.hits);
+        this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), []);
+        return;
+      }
+      // 押さえたままの音だけで済んだ（タイや持続の続き）
+      this.record({ step, correct: true, missing: [], extras: [], reactionMs: null, deviations: [] });
+      if (i + 1 >= this.steps.length) {
+        this.stop();
+        return;
+      }
+      i++;
+      early = [];
+    }
   }
 
   private pressWait(ev: NoteEvent): void {
@@ -181,15 +211,19 @@ export class SongPractice {
     this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), judge.extras);
     if (!judge.done) return;
 
+    // 次のステップの音を先に押していた（和音の一部を早めに押した等）ときは、読み間違いに数えず次へ持ち越す
+    const next = this.steps[this.current + 1];
+    const held = new Set(this.cb.sounding());
+    const early = judge.extras.filter((m) => held.has(m) && !!next?.notes.some((n) => n.midi === m));
     this.record({
       step,
-      correct: judge.extras.length === 0,
+      correct: judge.extras.length === early.length,
       missing: [],
-      extras: judge.extras,
+      extras: judge.extras.filter((m) => !early.includes(m)),
       reactionMs: this.firstPressAt - this.shownAt,
       deviations: [],
     });
-    if (this.current + 1 < this.steps.length) this.showWaitStep(this.current + 1);
+    if (next) this.showWaitStep(this.current + 1, early);
     else this.stop();
   }
 
@@ -215,6 +249,7 @@ export class SongPractice {
     const windowMs = Math.min(350, Math.max(150, this.beatMs * 0.45));
     this.matcher = new TimedMatcher(targets, windowMs, this.settings!.judge);
     this.stepExtras = this.steps.map(() => []);
+    this.creditFrom = 0;
     this.finalized = 0;
     this.cursorAt = -1;
     this.endAt = this.stepTimes[this.stepTimes.length - 1] + windowMs + 300;
@@ -237,6 +272,7 @@ export class SongPractice {
       this.score.moveCursor(this.steps[k].entryIndex);
       this.cb.status(this.progressText(k));
     }
+    this.creditSustained(now);
     for (const t of this.matcher!.expire(now)) {
       const { step, note } = this.targetOf[t];
       this.score.colorNote(this.steps[step].entryIndex, this.steps[step].notes[note].rawIndex, this.cb.colors().missing);
@@ -247,6 +283,23 @@ export class SongPractice {
       return;
     }
     if (this.running) this.raf = requestAnimationFrame(() => this.loop());
+  }
+
+  /**
+   * 楽譜上、同じ高さの音がまだ鳴っている位置（sustained）に来たとき、その音が鳴り続けていれば当たりにする
+   * （押さえたまま／ペダルで、押し直しが起きないため）
+   */
+  private creditSustained(now: number): void {
+    const m = this.matcher!;
+    let sounding: Set<number> | null = null;
+    for (let i = this.creditFrom; i < m.targets.length && m.targets[i].time <= now; i++) {
+      const { step, note } = this.targetOf[i];
+      const n = this.steps[step].notes[note];
+      if (!n.sustained) continue;
+      sounding ??= new Set(this.cb.sounding());
+      if (sounding.has(n.midi) && m.credit(i)) this.score.colorNote(this.steps[step].entryIndex, n.rawIndex, this.cb.colors().correct);
+    }
+    while (this.creditFrom < m.targets.length && m.targets[this.creditFrom].time + m.windowMs < now) this.creditFrom++;
   }
 
   private pressTempo(ev: NoteEvent): void {
@@ -275,7 +328,8 @@ export class SongPractice {
       const step = this.steps[k];
       const results = this.targetOf.map((t, i) => ({ ...t, r: m.result(i) })).filter((t) => t.step === k);
       const missing = results.filter((t) => !t.r.hit).map((t) => step.notes[t.note].midi);
-      const deviations = results.filter((t) => t.r.hit).map((t) => t.r.deviationMs!);
+      // 押さえたままで当たりにした音（ずれ null）はタイミングの集計に入れない
+      const deviations = results.flatMap((t) => (t.r.hit && t.r.deviationMs !== null ? [t.r.deviationMs] : []));
       const extras = this.stepExtras[k];
       if (missing.length || extras.length) {
         this.renderMini(step, (mm) => (missing.includes(mm) ? 'missing' : 'correct'), extras);

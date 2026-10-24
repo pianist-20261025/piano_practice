@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMidiMessage } from './parse';
+import { parseMidiMessage, parseSustainPedal } from './parse';
 
 describe('parseMidiMessage', () => {
   it('ノートオンは押鍵', () => {
@@ -18,5 +18,18 @@ describe('parseMidiMessage', () => {
   it('ノート以外は無視する', () => {
     expect(parseMidiMessage([0xfe], 0)).toBeNull(); // アクティブセンシング
     expect(parseMidiMessage([0xb0, 64, 127], 0)).toBeNull(); // ダンパーペダル
+  });
+});
+
+describe('parseSustainPedal', () => {
+  it('コントロールチェンジ 64 の値で踏み込み・解放', () => {
+    expect(parseSustainPedal([0xb0, 64, 127])).toBe(true);
+    expect(parseSustainPedal([0xb0, 64, 0])).toBe(false);
+    expect(parseSustainPedal([0xb3, 64, 70])).toBe(true);
+  });
+
+  it('ペダル以外は null', () => {
+    expect(parseSustainPedal([0xb0, 67, 127])).toBeNull(); // ソフトペダル
+    expect(parseSustainPedal([0x90, 64, 100])).toBeNull();
   });
 });
