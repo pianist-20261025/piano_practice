@@ -50,3 +50,19 @@ export function spellMidiInKey(midi: number, fifths: number, nearDiatonic?: numb
   }
   return spellMidi(midi, nearDiatonic);
 }
+
+/**
+ * 1小節の中の音に付ける臨時記号。小節内で一度付いた臨時記号は、同じ高さの後の音にも効くので、
+ * 調号に戻すときはナチュラル（や調号の記号）を書き直す必要がある。
+ * 返り値は音ごとの書く変化量（null なら書かない）。
+ */
+export function measureAccidentals(pitches: readonly Pitch[], fifths: number): (number | null)[] {
+  const current = new Map<string, number>();
+  return pitches.map((p) => {
+    const slot = `${p.step}${p.octave}`;
+    const now = current.get(slot) ?? keyAlter(fifths, p.step);
+    if (now === p.alter) return null;
+    current.set(slot, p.alter);
+    return p.alter;
+  });
+}

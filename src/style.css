@@ -300,3 +300,28 @@ td.note { font-weight: 600; }
 #song-feedback.ng { color: var(--wrong); }
 #song-progress { font-variant-numeric: tabular-nums; color: var(--muted); }
 #answers td.small { font-size: 12px; color: var(--muted); }
+
+/* 流れ読み */
+.flow-viewport {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.flow-strip { width: max-content; will-change: transform; }
+.flow-strip svg { display: block; }
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 30%;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+#flow-feedback { min-height: 32px; margin-top: 12px; font-size: 20px; font-weight: 600; }
+#flow-feedback.ok { color: var(--correct); }
+#flow-feedback.ng { color: var(--wrong); }
+#flow-progress { font-variant-numeric: tabular-nums; color: var(--muted); }

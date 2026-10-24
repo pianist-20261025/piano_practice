@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayedAccidental, keyAlter, keyLabel, spellMidiInKey, vexKeyName } from './key';
+import { displayedAccidental, keyAlter, keyLabel, measureAccidentals, spellMidiInKey, vexKeyName } from './key';
 import { pitchName, type Pitch } from './pitch';
 
 describe('keyAlter', () => {
@@ -57,5 +57,22 @@ describe('調の名前', () => {
     expect(vexKeyName(6)).toBe('F#');
     expect(keyLabel(3)).toBe('♯3 イ長調／嬰ヘ短調');
     expect(keyLabel(0)).toBe('調号なし ハ長調／イ短調');
+  });
+});
+
+describe('measureAccidentals', () => {
+  const p = (step: Pitch['step'], alter: number, octave = 4): Pitch => ({ step, alter, octave });
+
+  it('調号どおりなら書かない。臨時記号は小節内の同じ高さに効き続ける', () => {
+    expect(measureAccidentals([p('F', 1), p('G', 0), p('F', 1)], 0)).toEqual([1, null, null]);
+  });
+
+  it('臨時記号のあとで調号の音に戻すときはナチュラル（や調号の記号）を書き直す', () => {
+    expect(measureAccidentals([p('F', 1), p('F', 0)], 0)).toEqual([1, 0]);
+    expect(measureAccidentals([p('F', 0), p('F', 1)], 2)).toEqual([0, 1]);
+  });
+
+  it('オクターブが違えば別の音として扱う', () => {
+    expect(measureAccidentals([p('C', 1, 4), p('C', 0, 5)], 0)).toEqual([1, null]);
   });
 });

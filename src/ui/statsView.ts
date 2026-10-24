@@ -11,6 +11,7 @@ import {
 import { SHAPES, shapeById } from '../generator/shape';
 import { summarize, type AnswerRecord } from '../stats/session';
 import { aggregateShapeStats } from '../stats/shapeStats';
+import { aggregateFlowSessions } from '../stats/flowStats';
 import { aggregateSongStats } from '../stats/songStats';
 
 /** 誤答率の区切り。ヒートマップの色の段階（0〜4）に対応 */
@@ -33,9 +34,10 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
   const overall = overallAvgCorrectMs(stats.values());
   const all = summarize(records);
   // 反応時間は反射・形のモードだけ（曲のテンポモードの「ずれ」は意味が違うので混ぜない）
-  const drill = summarize(records.filter((r) => r.mode !== 'song'));
+  const drill = summarize(records.filter((r) => r.mode === 'reflex' || r.mode === 'shape'));
   const shapeStats = aggregateShapeStats(records);
   const songStats = aggregateSongStats(records);
+  const flowStats = aggregateFlowSessions(records);
 
   const tiles = `
     <div class="summary">
@@ -44,7 +46,7 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
       <div class="stat"><span class="label">正解時の平均反応</span><span class="value">${fmtMs(drill.avgCorrectReactionMs)}</span><span class="sub">反射・形のモード、全期間</span></div>
     </div>`;
 
-  if (!stats.size && !shapeStats.length && !songStats.length) {
+  if (!stats.size && !shapeStats.length && !songStats.length && !flowStats.length) {
     container.innerHTML = `${tiles}<p class="empty">まだ記録がありません。練習すると、音ごとの正答率と反応時間がここに出ます。</p>`;
     return;
   }
@@ -82,8 +84,25 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
       </table>
     </div>`
     : '';
+  const flowSection = flowStats.length
+    ? `<h3>流れ読みの記録（直近${flowStats.length}回）</h3>
+    <p class="note-text">ずれは押せた音だけで計算（正なら遅れ気味、負なら走り気味）。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>日時</th><th class="num">テンポ</th><th class="num">音数</th><th class="num">正答率</th><th class="num">ずれの平均</th><th class="num">傾向</th></tr></thead>
+        <tbody>${flowStats
+          .map(
+            (x) => `<tr><td>${new Date(x.session).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+              <td class="num">${x.bpm === null ? '—' : `♩=${x.bpm}`}</td><td class="num">${x.notes}</td><td class="num">${Math.round(x.accuracy * 100)}%</td>
+              <td class="num">${x.meanAbsTimingMs === null ? '—' : `${Math.round(x.meanAbsTimingMs)} ms`}</td>
+              <td class="num">${x.meanTimingMs === null ? '—' : `${x.meanTimingMs > 0 ? '+' : ''}${Math.round(x.meanTimingMs)} ms`}</td></tr>`,
+          )
+          .join('')}</tbody>
+      </table>
+    </div>`
+    : '';
   if (!stats.size) {
-    container.innerHTML = `${tiles}${shapeSection}${songSection}`;
+    container.innerHTML = `${tiles}${shapeSection}${flowSection}${songSection}`;
     return;
   }
 
@@ -127,6 +146,7 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
       </table>
     </div>
     ${shapeSection}
+    ${flowSection}
     ${songSection}`;
 
   attachTooltip(container, stats, overall);

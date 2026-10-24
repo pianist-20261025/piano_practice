@@ -1,3 +1,4 @@
+import { BeatClock } from '../audio/beatClock';
 import { Metronome } from '../audio/metronome';
 import type { JudgeOptions } from '../judge/judge';
 import { TimedMatcher, summarizeTiming, type TimedTarget } from '../judge/timing';
@@ -83,7 +84,7 @@ export class SongPractice {
   private finalized = 0;
   private cursorAt = -1;
   private beatMs = 0;
-  private nextClick = 0;
+  private clock: BeatClock | null = null;
   private endAt = 0;
   private raf = 0;
   private bpm = DEFAULT_BPM;
@@ -216,25 +217,18 @@ export class SongPractice {
     this.stepExtras = this.steps.map(() => []);
     this.finalized = 0;
     this.cursorAt = -1;
-    this.nextClick = origin - countIn * this.beatMs;
     this.endAt = this.stepTimes[this.stepTimes.length - 1] + windowMs + 300;
+    this.clock = new BeatClock(this.metronome, origin, this.beatMs, numerator, countIn, this.settings!.metronome, this.endAt);
     this.score.moveCursor(this.steps[0].entryIndex);
     this.renderMini(this.steps[0], () => 'pending', []);
     this.cb.feedback(`カウント ${countIn} 拍のあと始まります（♩=${Math.round(this.bpm)}）`, '');
     this.cb.status(this.progressText(0));
-    this.loop(origin);
+    this.loop();
   }
 
-  private loop(origin: number): void {
+  private loop(): void {
     const now = performance.now();
-    // メトロノーム（カウント中は必ず、演奏中は設定どおり）。少し先まで予約する
-    while (this.nextClick < now + 150 && this.nextClick < this.endAt) {
-      if (this.nextClick < origin || this.settings!.metronome) {
-        const beatIndex = Math.round((this.nextClick - origin) / this.beatMs);
-        this.metronome.click(this.nextClick, beatIndex % this.loaded!.timeSignature.numerator === 0);
-      }
-      this.nextClick += this.beatMs;
-    }
+    this.clock!.tick(now);
     // カーソルはそのステップの時刻に合わせて進める
     let k = this.cursorAt;
     while (k + 1 < this.steps.length && this.stepTimes[k + 1] <= now + 30) k++;
@@ -252,7 +246,7 @@ export class SongPractice {
       this.stop();
       return;
     }
-    if (this.running) this.raf = requestAnimationFrame(() => this.loop(origin));
+    if (this.running) this.raf = requestAnimationFrame(() => this.loop());
   }
 
   private pressTempo(ev: NoteEvent): void {

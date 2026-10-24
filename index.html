@@ -20,6 +20,32 @@
             <label class="radio"><input type="radio" name="mode" value="reflex" /> 反射モード（単音）</label>
             <label class="radio"><input type="radio" name="mode" value="shape" /> 形で読むモード（音程・和音）</label>
             <label class="radio"><input type="radio" name="mode" value="song" /> 曲モード（MusicXML）</label>
+            <label class="radio"><input type="radio" name="mode" value="flow" /> 流れ読みモード（スクロール）</label>
+          </fieldset>
+          <fieldset id="flow-settings" hidden>
+            <legend>流れ読み</legend>
+            <div class="row">
+              <label>小節数 <input id="flow-measures" type="number" min="2" max="64" /> 小節</label>
+              <label>テンポ ♩= <input id="flow-bpm" type="number" min="20" max="200" /></label>
+              <label>リズム
+                <select id="flow-rhythm">
+                  <option value="quarter">4分音符のみ</option>
+                  <option value="mixed">2分・4分・8分を混ぜる</option>
+                </select>
+              </label>
+              <label>跳躍の上限
+                <select id="flow-leap">
+                  <option value="1">2度（順次進行のみ）</option>
+                  <option value="2">3度まで</option>
+                  <option value="3">4度まで</option>
+                  <option value="4">5度まで</option>
+                  <option value="5">6度まで</option>
+                  <option value="6">7度まで</option>
+                  <option value="7">オクターブまで</option>
+                </select>
+              </label>
+            </div>
+            <p class="hint-inline">譜面が右から左へ流れます。縦線に音符が来たら弾いてください。間違えても止まりません。譜表・音域・調号の設定は下の欄のものを使います（大譜表なら小節ごとに上下どちらかの段）。</p>
           </fieldset>
           <fieldset id="song-settings" hidden>
             <legend>曲</legend>
@@ -40,10 +66,15 @@
             </div>
             <div id="tempo-options" class="row">
               <label>テンポ ♩= <input id="song-bpm" type="number" min="20" max="240" placeholder="楽譜どおり" /></label>
+            </div>
+            <p class="hint-inline">装飾音・繰り返し記号（書かれた順に1回だけ進む）・ペダル・アルペジオのずれは判定しません。タイの後ろ側と、前から伸ばしている音は押し直し不要です。</p>
+          </fieldset>
+          <fieldset id="timing-settings" hidden>
+            <legend>タイミングの判定</legend>
+            <div class="row">
               <label>許容するずれ ± <input id="tolerance" type="number" min="20" max="300" step="10" /> ms</label>
               <label class="check"><input id="metronome" type="checkbox" /> メトロノームを鳴らす（カウントは常に鳴る）</label>
             </div>
-            <p class="hint-inline">装飾音・繰り返し記号（書かれた順に1回だけ進む）・ペダル・アルペジオのずれは判定しません。タイの後ろ側と、前から伸ばしている音は押し直し不要です。</p>
           </fieldset>
           <fieldset id="shape-settings" hidden>
             <legend>出題する形</legend>
@@ -51,13 +82,13 @@
             <label>和音とみなす時間差 <input id="chord-window" type="number" min="30" max="150" step="10" /> ms
               <span class="hint-inline">（最初の音からこの時間内に押した音を1つの和音として判定）</span></label>
           </fieldset>
-          <fieldset class="drill-only">
+          <fieldset class="generated-only">
             <legend>譜表</legend>
             <label class="radio"><input type="radio" name="layout" value="treble" /> ト音記号</label>
             <label class="radio"><input type="radio" name="layout" value="bass" /> ヘ音記号</label>
             <label class="radio"><input type="radio" name="layout" value="grand" /> 大譜表（上下ランダム）</label>
           </fieldset>
-          <fieldset class="drill-only">
+          <fieldset class="generated-only">
             <legend>音域</legend>
             <div id="range-treble" class="range-row">
               <span class="range-name">ト音記号</span>
@@ -72,7 +103,7 @@
               <select id="range-bass-high" aria-label="ヘ音記号の最高音"></select>
             </div>
           </fieldset>
-          <fieldset class="drill-only">
+          <fieldset class="generated-only">
             <legend>調号・臨時記号</legend>
             <div class="row">
               <label class="radio"><input type="radio" name="keyKind" value="none" /> 調号なし</label>
@@ -140,6 +171,19 @@
           <div id="song-staff" class="mini-staff" aria-label="現在の位置（押した音の読み返し）"></div>
           <div id="song-feedback" aria-live="polite"></div>
         </div>
+      </section>
+
+      <section id="flow" class="panel wide" hidden>
+        <div class="practice-head">
+          <div id="flow-progress"></div>
+          <div id="flow-key" class="key-name"></div>
+          <button id="flow-stop">終了 <kbd>Esc</kbd></button>
+        </div>
+        <div id="flow-viewport" class="flow-viewport">
+          <div id="flow-strip" class="flow-strip"></div>
+          <div class="playhead" aria-hidden="true"></div>
+        </div>
+        <div id="flow-feedback" aria-live="polite"></div>
       </section>
 
       <section id="result" class="panel" hidden>

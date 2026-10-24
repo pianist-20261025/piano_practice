@@ -22,6 +22,8 @@ import {
   type RecordStore,
 } from '../stats/store';
 import type { HandSetting } from '../score/steps';
+import type { Rhythm } from '../generator/phrase';
+import { FlowPractice, summarizeFlow, type FlowResult } from './flowMode';
 import { SongPractice, summarizeSong, type SongMode, type SongResult } from './songMode';
 import { renderStats } from './statsView';
 
@@ -36,6 +38,12 @@ interface Settings {
   metronome: boolean;
   /** サンプルの id、または 'file'（最後に開いたファイル） */
   songSource: string;
+  /** 流れ読み */
+  flowMeasures: number;
+  flowBpm: number;
+  flowRhythm: Rhythm;
+  /** 跳躍の上限（五線上の距離。6度なら 5） */
+  flowMaxLeap: number;
   /** 形で読むモードで出す形の id */
   shapes: string[];
   /** この時間内に押した音を1つの和音とみなす（ms） */
@@ -62,6 +70,10 @@ const DEFAULT_SETTINGS: Settings = {
   toleranceMs: 100,
   metronome: true,
   songSource: 'minuet',
+  flowMeasures: 8,
+  flowBpm: 60,
+  flowRhythm: 'quarter',
+  flowMaxLeap: 5,
   shapes: DEFAULT_SHAPE_IDS,
   chordWindowMs: DEFAULT_CHORD_WINDOW_MS,
   limitKind: 'count',
@@ -83,7 +95,7 @@ const MAX_LEDGER_LINES = 4;
 const NEXT_DELAY_MS = 350;
 
 const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
-const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード', song: '曲モード' };
+const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード', song: '曲モード', flow: '流れ読みモード' };
 const SONG_MODE_LABELS: Record<SongMode, string> = { wait: '待機', tempo: 'テンポ' };
 const HAND_LABELS: Record<HandSetting, string> = { both: '両手', right: '右手', left: '左手' };
 
@@ -111,8 +123,8 @@ interface Question {
   saved: boolean;
 }
 
-type View = 'setup' | 'practice' | 'song' | 'result' | 'stats';
-const VIEWS: readonly View[] = ['setup', 'practice', 'song', 'result', 'stats'];
+type View = 'setup' | 'practice' | 'song' | 'flow' | 'result' | 'stats';
+const VIEWS: readonly View[] = ['setup', 'practice', 'song', 'flow', 'result', 'stats'];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -138,6 +150,7 @@ export class App {
   /** 仮想鍵盤はクリックで1音ずつしか押せないので、和音の音数ぶん集めてから判定する */
   private virtualPending: { notes: number[]; time: number } | null = null;
   private song!: SongPractice;
+  private flow!: FlowPractice;
   private songFile: { name: string; data: string } | null = loadSongFile();
 
   start(): void {
@@ -164,6 +177,18 @@ export class App {
       },
     });
     $('#song-stop').addEventListener('click', () => this.finishSession());
+    this.flow = new FlowPractice($('#flow-viewport'), $('#flow-strip'), {
+      persist: (record) => this.persistRecord(record),
+      finished: (result) => this.finishFlow(result),
+      colors: readColors,
+      status: (text) => ($('#flow-progress').textContent = text),
+      feedback: (text, kind) => {
+        const el = $('#flow-feedback');
+        el.textContent = text;
+        el.className = kind;
+      },
+    });
+    $('#flow-stop').addEventListener('click', () => this.finishSession());
     $<HTMLInputElement>('#song-file').addEventListener('change', (e) => this.openSongFile(e.target as HTMLInputElement));
 
     this.bindSettingsForm();
@@ -271,6 +296,10 @@ export class App {
       void this.startSong();
       return;
     }
+    if (this.settings.mode === 'flow') {
+      this.startFlow();
+      return;
+    }
     this.records = [];
     this.answered = [];
     this.question = null;
@@ -361,8 +390,8 @@ export class App {
   }
 
   private handleNoteOn(ev: NoteEvent): void {
-    if (this.settings.mode === 'song') {
-      if (this.running) this.song.noteOn(ev);
+    if (this.settings.mode === 'song' || this.settings.mode === 'flow') {
+      if (this.running) (this.settings.mode === 'song' ? this.song : this.flow).noteOn(ev);
       return;
     }
     const q = this.question;
@@ -447,10 +476,69 @@ export class App {
       this.song.stop();
       return;
     }
+    if (this.settings.mode === 'flow') {
+      this.flow.stop();
+      return;
+    }
     this.running = false;
     window.clearInterval(this.tickTimer);
     if (this.question) this.persist(this.question);
     this.renderResult();
+    this.showView('result');
+  }
+
+  // ---- 流れ読みモード ----
+
+  private startFlow(): void {
+    const s = this.settings;
+    this.showView('flow');
+    this.scrollKeyboardToRange();
+    $('#flow-key').textContent = '';
+    this.running = true;
+    try {
+      this.flow.start({
+        layout: s.layout,
+        phrase: {
+          ranges: s.ranges,
+          key: keySetting(s),
+          accidentals: s.accidentals,
+          measures: s.flowMeasures,
+          rhythm: s.flowRhythm,
+          maxLeap: s.flowMaxLeap,
+        },
+        bpm: s.flowBpm,
+        toleranceMs: s.toleranceMs,
+        metronome: s.metronome,
+        judge: { octaveEquivalent: s.octaveEquivalent },
+      });
+    } catch (e) {
+      this.running = false;
+      alert(`始められませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      this.showView('setup');
+    }
+  }
+
+  private finishFlow(result: FlowResult): void {
+    this.running = false;
+    const s = summarizeFlow(result);
+    const t = s.timing;
+    $('#result-title').textContent = `結果: 流れ読み（♩=${result.settings.bpm}、${result.phrase.measures}小節）`;
+    $('#summary').innerHTML = [
+      `<div class="stat"><span class="label">正答率</span><span class="value">${Math.round(s.accuracy * 100)}<small>%</small></span><span class="sub">${s.correct} / ${s.played} 音（全 ${result.phrase.notes.length}）</span></div>`,
+      `<div class="stat"><span class="label">タイミングOK（±${result.settings.toleranceMs} ms）</span><span class="value">${Math.round(t.onTimeRate * 100)}<small>%</small></span><span class="sub">押せた ${t.count} 音のうち</span></div>`,
+      `<div class="stat"><span class="label">ずれの平均</span><span class="value">${t.meanAbsMs === null ? '—' : `${Math.round(t.meanAbsMs)} ms`}</span><span class="sub">${tendencyText(t.meanMs)}</span></div>`,
+    ].join('');
+    $('#answers-head').innerHTML = '<tr><th>小節</th><th>音</th><th>押した音</th><th>ずれ</th></tr>';
+    const key = result.phrase.keyFifths;
+    const rows = result.outcomes
+      .filter((o) => !o.hit || o.extras.length)
+      .map((o) => {
+        const n = result.phrase.notes[o.index];
+        const played = [...(o.hit ? [pitchToMidi(n.pitch)] : []), ...o.extras].map((m) => pitchName(spellMidiInKey(m, key, diatonicIndex(n.pitch))));
+        const dev = o.deviationMs === null ? '—' : `${o.deviationMs > 0 ? '+' : ''}${Math.round(o.deviationMs)} ms`;
+        return `<tr class="ng"><td>${n.measure + 1}</td><td>${pitchName(n.pitch)}</td><td class="played">${played.join('・') || '（弾かなかった）'}</td><td class="small">${dev}</td></tr>`;
+      });
+    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="4">間違えた音はありません</td></tr>';
     this.showView('result');
   }
 
@@ -531,7 +619,7 @@ export class App {
       );
     } else {
       const t = s.timing;
-      const tendency = t.meanMs === null ? '' : Math.abs(t.meanMs) < 15 ? 'ほぼ中心' : t.meanMs > 0 ? `平均 ${Math.round(t.meanMs)} ms 遅れ気味` : `平均 ${Math.round(-t.meanMs)} ms 走り気味`;
+      const tendency = tendencyText(t.meanMs);
       tiles.push(
         `<div class="stat"><span class="label">タイミングOK（±${result.settings.toleranceMs} ms）</span><span class="value">${Math.round(t.onTimeRate * 100)}<small>%</small></span><span class="sub">押せた ${t.count} 音のうち</span></div>`,
         `<div class="stat"><span class="label">ずれの平均</span><span class="value">${t.meanAbsMs === null ? '—' : `${Math.round(t.meanAbsMs)} ms`}</span><span class="sub">${tendency}（♩=${Math.round(result.bpm)}）</span></div>`,
@@ -654,6 +742,10 @@ export class App {
     $<HTMLInputElement>('#song-bpm').value = s.songBpm === null ? '' : String(s.songBpm);
     $<HTMLInputElement>('#tolerance').value = String(s.toleranceMs);
     $<HTMLInputElement>('#metronome').checked = s.metronome;
+    $<HTMLInputElement>('#flow-measures').value = String(s.flowMeasures);
+    $<HTMLInputElement>('#flow-bpm').value = String(s.flowBpm);
+    $<HTMLSelectElement>('#flow-rhythm').value = s.flowRhythm;
+    $<HTMLSelectElement>('#flow-leap').value = String(s.flowMaxLeap);
     radio('mode').value = s.mode;
     radio('limitKind').value = s.limitKind;
     radio('layout').value = s.layout;
@@ -676,7 +768,7 @@ export class App {
       const keyKind = radio('keyKind').value as Settings['keyKind'];
       const checkedShapes = [...form.querySelectorAll<HTMLInputElement>('input[name=shape]:checked')].map((el) => el.value);
       const modeValue = radio('mode').value;
-      const mode: Mode = modeValue === 'shape' || modeValue === 'song' ? modeValue : 'reflex';
+      const mode: Mode = modeValue === 'shape' || modeValue === 'song' || modeValue === 'flow' ? modeValue : 'reflex';
       const bpmRaw = $<HTMLInputElement>('#song-bpm').value.trim();
       this.settings = {
         mode,
@@ -686,6 +778,10 @@ export class App {
         toleranceMs: clampInt($<HTMLInputElement>('#tolerance').value, 20, 300, DEFAULT_SETTINGS.toleranceMs),
         metronome: $<HTMLInputElement>('#metronome').checked,
         songSource: $<HTMLSelectElement>('#song-source').value || SAMPLES[0].id,
+        flowMeasures: clampInt($<HTMLInputElement>('#flow-measures').value, 2, 64, DEFAULT_SETTINGS.flowMeasures),
+        flowBpm: clampInt($<HTMLInputElement>('#flow-bpm').value, 20, 200, DEFAULT_SETTINGS.flowBpm),
+        flowRhythm: $<HTMLSelectElement>('#flow-rhythm').value === 'mixed' ? 'mixed' : 'quarter',
+        flowMaxLeap: clampInt($<HTMLSelectElement>('#flow-leap').value, 1, 7, DEFAULT_SETTINGS.flowMaxLeap),
         shapes: checkedShapes.length ? checkedShapes : DEFAULT_SHAPE_IDS,
         chordWindowMs: clampInt(
           $<HTMLInputElement>('#chord-window').value,
@@ -715,10 +811,16 @@ export class App {
       $('#mode-label').textContent =
         mode === 'song'
           ? `${MODE_LABELS[mode]}・${SONG_MODE_LABELS[this.settings.songMode]}`
-          : `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
+          : mode === 'flow'
+            ? `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}・♩=${this.settings.flowBpm}`
+            : `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
       $('#shape-settings').hidden = mode !== 'shape';
       $('#song-settings').hidden = mode !== 'song';
-      form.querySelectorAll<HTMLElement>('.drill-only').forEach((el) => (el.hidden = mode === 'song'));
+      $('#flow-settings').hidden = mode !== 'flow';
+      $('#timing-settings').hidden = !(mode === 'flow' || (mode === 'song' && this.settings.songMode === 'tempo'));
+      // 反射・形で読むモードだけの設定と、曲モード以外（出題を作るモード）の設定
+      form.querySelectorAll<HTMLElement>('.drill-only').forEach((el) => (el.hidden = mode === 'song' || mode === 'flow'));
+      form.querySelectorAll<HTMLElement>('.generated-only').forEach((el) => (el.hidden = mode === 'song'));
       dim('#tempo-options', this.settings.songMode !== 'tempo');
       dim('#focus-weak-label', mode !== 'reflex');
       this.grouper.setWindow(this.settings.chordWindowMs);
@@ -731,6 +833,13 @@ export class App {
     form.addEventListener('submit', (e) => e.preventDefault());
     sync();
   }
+}
+
+/** ずれの平均（符号付き）から、走り気味・遅れ気味を言葉にする */
+function tendencyText(meanMs: number | null): string {
+  if (meanMs === null) return '';
+  if (Math.abs(meanMs) < 15) return 'ほぼ中心';
+  return meanMs > 0 ? `平均 ${Math.round(meanMs)} ms 遅れ気味` : `平均 ${Math.round(-meanMs)} ms 走り気味`;
 }
 
 function loadSongFile(): { name: string; data: string } | null {
