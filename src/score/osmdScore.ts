@@ -110,13 +110,20 @@ export class OsmdScore {
     this.osmd.cursor.hide();
   }
 
-  /** entryIndex 番目の位置の rawIndex 番目の音の符頭に色を付ける（null で元に戻す） */
+  /**
+   * entryIndex 番目の位置の rawIndex 番目の音の符頭に色を付ける（null で元に戻す）。
+   * タイの始まりの音なら、タイでつながった後ろ側の音符にも同じ色を付ける（押し直さずに鳴り続けるため）
+   */
   colorNote(entryIndex: number, rawIndex: number, color: string | null): void {
     const note = this.notes[entryIndex]?.[rawIndex];
     if (!note) return;
-    paint(this.osmd, note, color);
-    if (color) this.colored.add(note);
-    else this.colored.delete(note);
+    const tie = note.NoteTie;
+    const chain = tie && tie.StartNote === note ? tie.Notes : [note];
+    for (const n of chain) {
+      paint(this.osmd, n, color);
+      if (color) this.colored.add(n);
+      else this.colored.delete(n);
+    }
   }
 
   clearColors(): void {

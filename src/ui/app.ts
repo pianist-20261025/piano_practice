@@ -177,6 +177,8 @@ export class App {
       persist: (record) => this.persistRecord(record),
       finished: (result) => this.finishSong(result),
       sounding: () => this.hub.soundingNotes(),
+      heldSince: (midi) => this.hub.heldSince(midi),
+      heldNotes: () => this.hub.heldNotes(),
       colors: readColors,
       status: (text) => ($('#song-progress').textContent = text),
       feedback: (html, kind) => {

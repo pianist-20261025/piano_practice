@@ -76,3 +76,27 @@ describe('buildSteps: 同じ音の持続', () => {
     expect(sustainedOf(steps)).toEqual([[], []]);
   });
 });
+
+describe('buildSteps: 連符の端数', () => {
+  it('前の音が終わる時刻と次の音の時刻が端数でずれても、ふつうの連打として扱う（押し直しが必要）', () => {
+    // 3連符 3つ（1/3 拍ずつ）のあとに同じ高さの音。足し合わせると 0.99999... になる
+    const third = 1 / 3;
+    const steps = buildSteps([
+      e(0, [n(60, 'right', { duration: third })]),
+      e(third, [n(62, 'right', { duration: third })]),
+      e(third * 2, [n(64, 'right', { duration: third })]),
+      e(1.0000001, [n(64)]),
+    ]);
+    expect(steps.map((s) => s.notes[0].sustained)).toEqual([false, false, false, false]);
+  });
+
+  it('端数のずれで別のカーソル位置に分かれた同じ時刻の音は、1つの位置にまとめる', () => {
+    const a = e(1, [n(60)]);
+    const b = e(1.0000004, [n(67, 'left')]);
+    const steps = buildSteps([e(0, [n(55)]), a, b, e(2, [n(62)])]);
+    expect(steps.map((s) => s.notes.map((x) => x.midi))).toEqual([[55], [60, 67], [62]]);
+    // 色付けのため、どのカーソル位置の音かは音ごとに覚えている
+    expect(steps[1].notes.map((x) => x.entryIndex)).toEqual([a.index, b.index]);
+    expect(steps[1].entryIndex).toBe(a.index);
+  });
+});

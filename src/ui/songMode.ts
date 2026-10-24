@@ -2,6 +2,7 @@ import { BeatClock } from '../audio/beatClock';
 import { Metronome } from '../audio/metronome';
 import type { JudgeOptions } from '../judge/judge';
 import { TimedMatcher, summarizeTiming, type TimedTarget } from '../judge/timing';
+import { heldByOtherHand, type KeyOwner } from '../judge/heldKeys';
 import { WaitStepJudge } from '../judge/waitJudge';
 import type { NoteEvent } from '../midi/types';
 import type { Clef } from '../music/clef';
@@ -9,7 +10,7 @@ import { spellMidiInKey } from '../music/key';
 import { pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type NoteState, type StaffColors } from '../render/staffRenderer';
 import { OsmdScore, type LoadedScore } from '../score/osmdScore';
-import { buildSteps, type HandSetting, type Step } from '../score/steps';
+import { buildSteps, type HandSetting, type Step, type StepNote } from '../score/steps';
 import type { AnswerRecord } from '../stats/session';
 
 export type SongMode = 'wait' | 'tempo';
@@ -26,6 +27,9 @@ export interface SongSettings {
 }
 
 export const DEFAULT_BPM = 80;
+type OptionalKind = 'sustained' | 'blocked';
+/** 先に押してしまった音を、何か所先まで持ち越すか */
+const LOOKAHEAD_STEPS = 4;
 
 /** 1ステップの結果（間違えたステップの一覧と記録に使う） */
 export interface StepOutcome {
@@ -54,6 +58,10 @@ interface Callbacks {
   colors(): StaffColors;
   /** いま鳴っている音（押さえている鍵盤＋ペダルで伸びている音） */
   sounding(): number[];
+  /** いま押さえている鍵盤（ペダルは含まない） */
+  heldNotes(): number[];
+  /** その鍵盤を押さえ始めた時刻（押さえていなければ undefined） */
+  heldSince(midi: number): number | undefined;
   /** 進行状況の表示 */
   status(text: string): void;
   feedback(html: string, kind: 'ok' | 'ng' | ''): void;
@@ -76,6 +84,8 @@ export class SongPractice {
   private waitJudge: WaitStepJudge | null = null;
   private shownAt = 0;
   private firstPressAt: number | null = null;
+  /** いまの位置で、押し直さなくてよいと分かった音 */
+  private optionalHere = new Map<number, OptionalKind>();
 
   // テンポモード
   private matcher: TimedMatcher | null = null;
@@ -83,8 +93,12 @@ export class SongPractice {
   /** targets の番号 → (ステップ, そのステップの何番目の音) */
   private targetOf: { step: number; note: number }[] = [];
   private stepExtras: number[][] = [];
-  /** creditSustained で見始める目標の番号 */
+  /** creditHeld で見始める目標の番号 */
   private creditFrom = 0;
+  /** 押さえている鍵盤が、楽譜のどちらの手の音として押されたか */
+  private owners = new Map<number, KeyOwner>();
+  /** テンポモードで、押し直さなくてよいと分かった目標（窓の終わりに当たりにする） */
+  private optionalTargets = new Set<number>();
   private finalized = 0;
   private cursorAt = -1;
   private beatMs = 0;
@@ -119,6 +133,8 @@ export class SongPractice {
     this.steps = buildSteps(this.loaded.entries, settings.hands);
     if (!this.steps.length) throw new Error('判定する音がありません（片手モードの手の選び方を確かめてください）');
     this.outcomes = [];
+    this.owners.clear();
+    this.optionalTargets.clear();
     this.running = true;
     this.bpm = settings.bpm ?? this.loaded.bpm ?? DEFAULT_BPM;
     if (settings.songMode === 'wait') this.startWait();
@@ -155,10 +171,48 @@ export class SongPractice {
   }
 
   /**
-   * i 番目のステップを出す。次の音はすでに鳴っていることがあるので、その分は押鍵なしで弾けたことにする:
-   * - 楽譜上、同じ高さの音がまだ鳴っている（sustained）位置で、その音が鳴り続けている（押さえたまま／ペダル）
-   * - 前のステップで先に押してしまった（early）音を、まだ押さえている
-   * すべて済んでいれば、そのまま次へ進む。
+   * 押し直さなくてよい音の種類（押鍵がなくても弾けたとみなせる音）:
+   * - sustained: 楽譜上、同じ高さの音がまだ鳴っている位置で、その音が鳴り続けている（押さえたまま／ペダル）
+   * - blocked: 反対の手が前から押さえている鍵盤（同じ鍵盤は2回押せないので、こちらの手は打鍵できない）
+   */
+  private optional(n: StepNote, since: number): OptionalKind | null {
+    if (n.sustained && this.cb.sounding().includes(n.midi)) return 'sustained';
+    return heldByOtherHand(n.hand, this.owners.get(n.midi), this.cb.heldSince(n.midi), since) ? 'blocked' : null;
+  }
+
+  /**
+   * 押し直さなくてよい音を覚えておく。一度そうだと分かった音は、この位置にいる間はそのまま
+   * （次の音を弾く前に、書かれた長さどおり鍵盤を離すことがあるため）
+   */
+  private noteOptional(step: Step): void {
+    for (const n of step.notes) {
+      if (this.optionalHere.get(n.midi) === 'sustained') continue;
+      const kind = this.optional(n, this.shownAt);
+      if (kind) this.optionalHere.set(n.midi, kind);
+    }
+  }
+
+  /**
+   * 足りない音がすべて「押し直さなくてよい音」なら、それらを弾けたことにする。
+   * blocked の音は、押さえたままなのか、持ち替えて弾き直すつもりなのかが押鍵の時点では分からないので、
+   * 先の位置の音を弾き始めた（movedOn）ときに限って認める。それまでに弾き直せばふつうに当たりになる。
+   */
+  private creditOptional(step: Step, movedOn: boolean): void {
+    const judge = this.waitJudge!;
+    this.noteOptional(step);
+    const missing = step.notes.filter((n) => judge.missing.includes(n.midi));
+    if (!missing.length) return;
+    const kinds = missing.map((n) => this.optionalHere.get(n.midi));
+    if (kinds.some((k) => !k) || (!movedOn && kinds.includes('blocked'))) return;
+    for (const n of missing) {
+      judge.credit(n.midi);
+      this.paint(n, this.cb.colors().correct);
+    }
+  }
+
+  /**
+   * i 番目のステップを出す。early は、すでに先の位置の音として押してしまった（まだ押さえている）音。
+   * その音はこの位置で弾けたことにし、ほかの音が押し直し不要の音だけなら、そのまま次へ進む（先へ弾き進めているため）。
    */
   private showWaitStep(i: number, early: readonly number[]): void {
     for (;;) {
@@ -171,12 +225,18 @@ export class SongPractice {
       );
       this.shownAt = performance.now();
       this.firstPressAt = null;
-      const sounding = new Set(this.cb.sounding());
+      this.optionalHere = new Map();
+      this.noteOptional(step);
+      const held = new Set(this.cb.heldNotes());
+      early = early.filter((m) => held.has(m));
       for (const n of step.notes) {
-        if (sounding.has(n.midi) && (n.sustained || early.includes(n.midi)) && this.waitJudge.credit(n.midi)) {
-          this.score.colorNote(step.entryIndex, n.rawIndex, this.cb.colors().correct);
+        if (early.includes(n.midi) && this.waitJudge.credit(n.midi)) {
+          this.paint(n, this.cb.colors().correct);
+          this.setOwner(n.midi, n.hand); // この位置の手の音として押したことになる
         }
       }
+      // 先の位置の音をすでに弾いている＝先へ弾き進めている
+      if (early.length) this.creditOptional(step, true);
       this.cb.status(this.progressText(i));
       this.cb.feedback('', '');
       if (!this.waitJudge.done) {
@@ -184,14 +244,13 @@ export class SongPractice {
         this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), []);
         return;
       }
-      // 押さえたままの音だけで済んだ（タイや持続の続き）
       this.record({ step, correct: true, missing: [], extras: [], reactionMs: null, deviations: [] });
       if (i + 1 >= this.steps.length) {
         this.stop();
         return;
       }
+      early = early.filter((m) => !step.notes.some((n) => n.midi === m));
       i++;
-      early = [];
     }
   }
 
@@ -201,20 +260,25 @@ export class SongPractice {
     this.firstPressAt ??= ev.time;
     const r = judge.press(ev.note);
     if (r === 'hit') {
+      const n = step.notes.find((x) => x.midi === ev.note) ?? step.notes.find((x) => (x.midi - ev.note) % 12 === 0);
+      if (n) this.owners.set(ev.note, { hand: n.hand, pressedAt: ev.time });
       const hit = new Set(judge.hits);
-      step.notes.forEach((n) => hit.has(n.midi) && this.score.colorNote(step.entryIndex, n.rawIndex, this.cb.colors().correct));
+      step.notes.forEach((n) => hit.has(n.midi) && this.paint(n, this.cb.colors().correct));
     }
-    if (r === 'extra') {
-      this.cb.feedback(`余計な音: ${this.names(judge.extras, step)}`, 'ng');
+    // 先の位置の音を弾き始めたのなら、読み間違いではない（下で持ち越す）
+    const ahead = this.aheadNotes(this.current);
+    // ほかの音がそろった、または先の位置の音を弾き始めた → 押し直さなくてよい音は弾けたことにする
+    this.creditOptional(step, r === 'extra' && ahead.has(ev.note));
+    if (r === 'extra' && !ahead.has(ev.note)) {
+      this.cb.feedback(`余計な音: ${this.names(judge.extras.filter((m) => !ahead.has(m)), step)}`, 'ng');
     }
     const hits = new Set(judge.hits);
-    this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), judge.extras);
+    this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), judge.extras.filter((m) => !ahead.has(m)));
     if (!judge.done) return;
 
-    // 次のステップの音を先に押していた（和音の一部を早めに押した等）ときは、読み間違いに数えず次へ持ち越す
-    const next = this.steps[this.current + 1];
-    const held = new Set(this.cb.sounding());
-    const early = judge.extras.filter((m) => held.has(m) && !!next?.notes.some((n) => n.midi === m));
+    // 先の位置の音を先に押していた（和音の一部を早めに押した等）ときは、押さえていれば持ち越し、間違いに数えない
+    const held = new Set(this.cb.heldNotes());
+    const early = judge.extras.filter((m) => held.has(m) && ahead.has(m));
     this.record({
       step,
       correct: judge.extras.length === early.length,
@@ -223,8 +287,15 @@ export class SongPractice {
       reactionMs: this.firstPressAt - this.shownAt,
       deviations: [],
     });
-    if (next) this.showWaitStep(this.current + 1, early);
+    if (this.current + 1 < this.steps.length) this.showWaitStep(this.current + 1, early);
     else this.stop();
+  }
+
+  /** i 番目より後の、少し先までのステップに出てくる音（先に押してしまった音の持ち越し先） */
+  private aheadNotes(i: number): Set<number> {
+    const out = new Set<number>();
+    for (const st of this.steps.slice(i + 1, i + 1 + LOOKAHEAD_STEPS)) for (const n of st.notes) out.add(n.midi);
+    return out;
   }
 
   // ---- テンポモード ----
@@ -272,10 +343,10 @@ export class SongPractice {
       this.score.moveCursor(this.steps[k].entryIndex);
       this.cb.status(this.progressText(k));
     }
-    this.creditSustained(now);
+    this.creditHeld(now);
     for (const t of this.matcher!.expire(now)) {
       const { step, note } = this.targetOf[t];
-      this.score.colorNote(this.steps[step].entryIndex, this.steps[step].notes[note].rawIndex, this.cb.colors().missing);
+      this.paint(this.steps[step].notes[note], this.cb.colors().missing);
     }
     this.finalizeTempo(now);
     if (now > this.endAt) {
@@ -286,20 +357,29 @@ export class SongPractice {
   }
 
   /**
-   * 楽譜上、同じ高さの音がまだ鳴っている位置（sustained）に来たとき、その音が鳴り続けていれば当たりにする
-   * （押さえたまま／ペダルで、押し直しが起きないため）
+   * 押し直しが起きない音（sustained で鳴り続けている音／反対の手が押さえている鍵盤）を、押鍵なしで当たりにする。
+   * 弾き直してもよいので、受け付ける時間（窓）が終わるまで待ち、弾き直されなかったときだけ当たりにする。
    */
-  private creditSustained(now: number): void {
+  private creditHeld(now: number): void {
     const m = this.matcher!;
     let sounding: Set<number> | null = null;
     for (let i = this.creditFrom; i < m.targets.length && m.targets[i].time <= now; i++) {
+      if (m.result(i).hit || this.optionalTargets.has(i)) continue;
       const { step, note } = this.targetOf[i];
       const n = this.steps[step].notes[note];
-      if (!n.sustained) continue;
       sounding ??= new Set(this.cb.sounding());
-      if (sounding.has(n.midi) && m.credit(i)) this.score.colorNote(this.steps[step].entryIndex, n.rawIndex, this.cb.colors().correct);
+      const sustained = n.sustained && sounding.has(n.midi);
+      if (sustained || heldByOtherHand(n.hand, this.owners.get(n.midi), this.cb.heldSince(n.midi), m.targets[i].time - m.windowMs)) {
+        this.optionalTargets.add(i);
+      }
     }
-    while (this.creditFrom < m.targets.length && m.targets[this.creditFrom].time + m.windowMs < now) this.creditFrom++;
+    while (this.creditFrom < m.targets.length && m.targets[this.creditFrom].time + m.windowMs < now) {
+      const i = this.creditFrom++;
+      if (this.optionalTargets.has(i) && m.credit(i)) {
+        const { step, note } = this.targetOf[i];
+        this.paint(this.steps[step].notes[note], this.cb.colors().correct);
+      }
+    }
   }
 
   private pressTempo(ev: NoteEvent): void {
@@ -307,7 +387,8 @@ export class SongPractice {
     if (r.kind === 'hit') {
       const { step, note } = this.targetOf[r.target];
       const s = this.steps[step];
-      this.score.colorNote(s.entryIndex, s.notes[note].rawIndex, this.cb.colors().correct);
+      this.owners.set(ev.note, { hand: s.notes[note].hand, pressedAt: ev.time });
+      this.paint(s.notes[note], this.cb.colors().correct);
       const d = Math.round(r.deviationMs);
       const ok = Math.abs(d) <= this.settings!.toleranceMs;
       this.cb.feedback(`${ok ? 'OK' : d < 0 ? '早い' : '遅い'} ${d > 0 ? '+' : ''}${d} ms`, ok ? 'ok' : 'ng');
@@ -376,6 +457,15 @@ export class SongPractice {
       extra: [...new Set(extras)].map(spell),
       noteClef: clefOf,
     });
+  }
+
+  private paint(n: StepNote, color: string): void {
+    this.score.colorNote(n.entryIndex, n.rawIndex, color);
+  }
+
+  private setOwner(midi: number, hand: Step['notes'][number]['hand']): void {
+    const at = this.cb.heldSince(midi);
+    if (at !== undefined) this.owners.set(midi, { hand, pressedAt: at });
   }
 
   private names(midis: readonly number[], step: Step): string {

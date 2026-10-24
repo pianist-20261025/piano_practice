@@ -33,3 +33,13 @@ describe('InputHub: 鳴っている音', () => {
     expect(hub.soundingNotes()).toEqual([]);
   });
 });
+
+describe('InputHub.heldSince', () => {
+  it('押さえ始めた時刻。離すと undefined', () => {
+    const hub = new InputHub();
+    hub.emit({ ...ev('on', 60), time: 1234 });
+    expect(hub.heldSince(60)).toBe(1234);
+    hub.emit(ev('off', 60));
+    expect(hub.heldSince(60)).toBeUndefined();
+  });
+});

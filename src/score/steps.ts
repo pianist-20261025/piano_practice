@@ -30,7 +30,8 @@ export interface RawEntry {
 export interface StepNote {
   midi: number;
   hand: Hand;
-  /** RawEntry.notes の何番目か（色付けで使う） */
+  /** どのカーソル位置の、RawEntry.notes の何番目の音か（色付けで使う） */
+  entryIndex: number;
   rawIndex: number;
   /**
    * 同じ高さの音がまだ鳴っている（別の声部の長い音やタイが続いている）ところに書かれた音。
@@ -56,33 +57,55 @@ export interface Step {
  * - 反復記号でカーソルが戻ったときは、すでに通った位置を飛ばす（書かれた順に1回だけ進む）
  * - 判定対象の音が残らない位置はステップにしない（カーソルはそこを通り過ぎる）
  */
+/**
+ * 時刻の比較に使う許容幅（4分音符単位）。MusicXML の連符の長さは割り切れないことがあり
+ * （例: 3連符の 1/3 拍が 0.33333 で書かれる）、足し合わせた時刻にわずかな端数が出るため。
+ */
+export const TIME_EPS = 1e-3;
+
 export function buildSteps(entries: readonly RawEntry[], hands: HandSetting = 'both'): Step[] {
   const steps: Step[] = [];
   let lastTime = -Infinity;
   /** これまでに鳴り始めた音の、鳴っている区間（両手とも。片手モードでも楽譜上の持続は同じ） */
   let sounding: { midi: number; start: number; end: number }[] = [];
-  for (const entry of entries) {
-    if (entry.time <= lastTime) continue;
-    lastTime = entry.time;
-    const t = entry.time;
-    sounding = sounding.filter((s) => s.end > t);
-    // この位置より前から鳴り続けている音、またはこの位置でタイが続いている音
-    const held = new Set(sounding.filter((s) => s.start < t).map((s) => s.midi));
-    for (const n of entry.notes) if (n.tieContinuation && !n.rest) held.add(n.midi);
+  /** 端数のずれで別のカーソル位置に分かれた、同じ時刻の音をまとめるための直前の位置 */
+  let group: { time: number; notes: StepNote[]; entry: RawEntry; held: Set<number> } | null = null;
 
-    const notes: StepNote[] = [];
+  const flush = () => {
+    if (group?.notes.length) {
+      group.notes.sort((a, b) => a.midi - b.midi);
+      const e = group.entry;
+      steps.push({ entryIndex: e.index, measureIndex: e.measureIndex, measureNumber: e.measureNumber, time: e.time, notes: group.notes });
+    }
+    group = null;
+  };
+
+  for (const entry of entries) {
+    const t = entry.time;
+    // 反復記号でカーソルが戻った位置は飛ばす
+    if (t < lastTime - TIME_EPS) continue;
+    if (!group || t > group.time + TIME_EPS) {
+      flush();
+      sounding = sounding.filter((x) => x.end > t + TIME_EPS);
+      // この位置より前から鳴り続けている音
+      const held = new Set(sounding.filter((x) => x.start < t - TIME_EPS).map((x) => x.midi));
+      group = { time: t, notes: [], entry, held };
+    }
+    lastTime = Math.max(lastTime, t);
+    const g = group;
+    // この位置でタイが続いている音も、鳴り続けている音
+    for (const n of entry.notes) if (n.tieContinuation && !n.rest) g.held.add(n.midi);
     entry.notes.forEach((n, rawIndex) => {
       if (n.rest || n.grace || n.tieContinuation) return;
       if (hands !== 'both' && n.hand !== hands) return;
-      if (notes.some((x) => x.midi === n.midi)) return;
-      notes.push({ midi: n.midi, hand: n.hand, rawIndex, sustained: held.has(n.midi) });
+      if (g.notes.some((x) => x.midi === n.midi)) return;
+      g.notes.push({ midi: n.midi, hand: n.hand, entryIndex: entry.index, rawIndex, sustained: false });
     });
     for (const n of entry.notes) {
-      if (!n.rest && !n.grace && n.duration > 0) sounding.push({ midi: n.midi, start: t, end: t + n.duration });
+      if (!n.rest && !n.grace && n.duration > 0) sounding.push({ midi: n.midi, start: g.time, end: g.time + n.duration });
     }
-    if (!notes.length) continue;
-    notes.sort((a, b) => a.midi - b.midi);
-    steps.push({ entryIndex: entry.index, measureIndex: entry.measureIndex, measureNumber: entry.measureNumber, time: entry.time, notes });
+    for (const n of g.notes) n.sustained = g.held.has(n.midi);
   }
+  flush();
   return steps;
 }
