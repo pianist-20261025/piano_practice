@@ -1,34 +1,56 @@
-import { generateSingleNote } from '../generator/singleNote';
+import { generateSingleNote, type DiatonicRange, type KeySetting, type SingleNoteQuestion } from '../generator/singleNote';
 import { InputHub } from '../input/hub';
 import { PcKeyboardInput } from '../input/pcKeyboard';
 import { VirtualKeyboard } from '../input/virtualKeyboard';
 import { judgeAttempt, type JudgeOptions } from '../judge/judge';
 import { MidiInput, type MidiStatus } from '../midi/midiInput';
 import type { NoteEvent } from '../midi/types';
-import type { Clef } from '../music/clef';
-import { pitchName, pitchToMidi, spellMidi, diatonicIndex, type Pitch } from '../music/pitch';
-import { StaffRenderer, type StaffColors } from '../render/staffRenderer';
+import { CLEFS, CLEF_LABELS, ledgerLinesAt, staffRange, type Clef } from '../music/clef';
+import { KEY_FIFTHS_RANGE, keyLabel, spellMidiInKey } from '../music/key';
+import { diatonicIndex, pitchFromDiatonic, pitchName, pitchToMidi, type Pitch } from '../music/pitch';
+import { StaffRenderer, type StaffColors, type StaffLayout } from '../render/staffRenderer';
 import { summarize, type AnswerRecord } from '../stats/session';
 
 interface Settings {
   limitKind: 'count' | 'time';
   count: number;
   seconds: number;
-  ledgerLines: number;
+  layout: StaffLayout;
+  ranges: Record<Clef, DiatonicRange>;
+  keyKind: KeySetting['kind'];
+  keyFifths: number;
+  keyMaxAccidentals: number;
+  accidentals: boolean;
   octaveEquivalent: boolean;
 }
 
-const DEFAULT_SETTINGS: Settings = { limitKind: 'count', count: 20, seconds: 60, ledgerLines: 1, octaveEquivalent: false };
+const DEFAULT_SETTINGS: Settings = {
+  limitKind: 'count',
+  count: 20,
+  seconds: 60,
+  layout: 'treble',
+  ranges: { treble: staffRange('treble', 1), bass: staffRange('bass', 1) },
+  keyKind: 'none',
+  keyFifths: 0,
+  keyMaxAccidentals: 4,
+  accidentals: false,
+  octaveEquivalent: false,
+};
 const SETTINGS_KEY = 'sight-reader:settings';
+/** 音域の選択肢として出す加線の最大本数 */
+const MAX_LEDGER_LINES = 4;
 /** 正解してから次の問題を出すまでの間 */
 const NEXT_DELAY_MS = 350;
 
-interface Question {
-  pitch: Pitch;
+const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
+
+interface Question extends SingleNoteQuestion {
   midi: number;
   shownAt: number;
   attempts: number;
   record: AnswerRecord | null;
+  /** 最初に押した音（譜面上の綴り） */
+  firstPlayed: Pitch | null;
 }
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -36,8 +58,8 @@ const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as
 export class App {
   private hub = new InputHub();
   private settings = loadSettings();
-  private clef: Clef = 'treble';
   private records: AnswerRecord[] = [];
+  private answered: Question[] = [];
   private question: Question | null = null;
   private running = false;
   private advancing = false;
@@ -48,7 +70,6 @@ export class App {
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
-    this.keyboard.scrollToNote(72);
     const pc = new PcKeyboardInput(this.hub.emit, (base) => this.showOctave(base));
     pc.attach();
     this.showOctave(pc.base);
@@ -69,16 +90,19 @@ export class App {
       if (e.code === 'Escape' && this.running) this.finishSession();
     });
     this.showView('setup');
+    this.scrollKeyboardToRange();
   }
 
   // ---- セッション ----
 
   private startSession(): void {
     this.records = [];
+    this.answered = [];
     this.question = null;
     this.running = true;
     this.advancing = false;
     this.showView('practice');
+    this.scrollKeyboardToRange();
     $('#feedback').textContent = '';
     $('#reaction').textContent = '';
     if (this.settings.limitKind === 'time') {
@@ -99,12 +123,43 @@ export class App {
       this.finishSession();
       return;
     }
-    const pitch = generateSingleNote({ clef: this.clef, ledgerLines: this.settings.ledgerLines }, Math.random, this.question?.pitch);
-    this.staff.render({ clef: this.clef, expected: pitch, status: 'pending' });
-    this.question = { pitch, midi: pitchToMidi(pitch), shownAt: performance.now(), attempts: 0, record: null };
+    const s = this.settings;
+    const generated = generateSingleNote(
+      {
+        clefs: s.layout === 'grand' ? CLEFS : [s.layout],
+        ranges: s.ranges,
+        key: keySetting(s),
+        accidentals: s.accidentals,
+      },
+      Math.random,
+      this.question ?? undefined,
+    );
+    this.question = {
+      ...generated,
+      midi: pitchToMidi(generated.pitch),
+      shownAt: 0,
+      attempts: 0,
+      record: null,
+      firstPlayed: null,
+    };
+    this.renderQuestion('pending');
+    this.question.shownAt = performance.now();
     $('#feedback').textContent = '';
     $('#feedback').className = '';
+    $('#key-name').textContent = generated.keyFifths !== 0 || s.keyKind !== 'none' ? keyLabel(generated.keyFifths) : '';
     this.updateProgress();
+  }
+
+  private renderQuestion(status: 'pending' | 'correct' | 'wrong', played?: Pitch): void {
+    const q = this.question!;
+    this.staff.render({
+      layout: this.settings.layout,
+      clef: q.clef,
+      keyFifths: q.keyFifths,
+      expected: q.pitch,
+      status,
+      played,
+    });
   }
 
   private handleNoteOn(ev: NoteEvent): void {
@@ -112,19 +167,23 @@ export class App {
     if (!this.running || this.advancing || !q) return;
     const judgeOptions: JudgeOptions = { octaveEquivalent: this.settings.octaveEquivalent };
     const result = judgeAttempt([q.midi], { notes: [ev.note], time: ev.time }, q.shownAt, judgeOptions);
+    const played = spellMidiInKey(ev.note, q.keyFifths, diatonicIndex(q.pitch));
     q.attempts++;
     if (!q.record) {
       q.record = {
         timestamp: Date.now(),
         mode: 'reflex',
-        clef: this.clef,
+        clef: q.clef,
+        keyFifths: q.keyFifths,
         expected: [q.midi],
         played: [ev.note],
         correct: result.isCorrect,
         reactionMs: result.reactionMs,
         attempts: 1,
       };
+      q.firstPlayed = played;
       this.records.push(q.record);
+      this.answered.push(q);
       $('#reaction').textContent = `反応時間 ${formatMs(result.reactionMs)}`;
     } else {
       q.record.attempts = q.attempts;
@@ -132,15 +191,14 @@ export class App {
 
     const feedback = $('#feedback');
     if (result.isCorrect) {
-      this.staff.render({ clef: this.clef, expected: q.pitch, status: 'correct' });
+      this.renderQuestion('correct');
       feedback.textContent = q.attempts === 1 ? '正解' : '正解（やり直し）';
       feedback.className = 'ok';
       this.advancing = true;
       this.updateProgress();
       window.setTimeout(() => this.running && this.nextQuestion(), NEXT_DELAY_MS);
     } else {
-      const played = spellMidi(ev.note, diatonicIndex(q.pitch));
-      this.staff.render({ clef: this.clef, expected: q.pitch, status: 'wrong', played });
+      this.renderQuestion('wrong', played);
       feedback.textContent = `押した音: ${pitchName(played)}`;
       feedback.className = 'ng';
       this.updateProgress();
@@ -172,16 +230,27 @@ export class App {
       <div class="stat"><span class="label">正答率</span><span class="value">${s.total ? Math.round(s.accuracy * 100) : 0}<small>%</small></span><span class="sub">${s.correct} / ${s.total} 問</span></div>
       <div class="stat"><span class="label">平均反応時間</span><span class="value">${s.avgReactionMs === null ? '—' : formatMs(s.avgReactionMs)}</span><span class="sub">全問の最初の押鍵まで</span></div>
       <div class="stat"><span class="label">正解時の平均</span><span class="value">${s.avgCorrectReactionMs === null ? '—' : formatMs(s.avgCorrectReactionMs)}</span><span class="sub">1回目で正解した問題</span></div>`;
-    const rows = this.records.map((r, i) => {
-      const expected = spellMidi(r.expected[0]);
-      const played = spellMidi(r.played[0], diatonicIndex(expected));
-      return `<tr class="${r.correct ? 'ok' : 'ng'}"><td>${i + 1}</td><td>${pitchName(expected)}</td><td>${r.correct ? '○' : pitchName(played)}</td><td>${formatMs(r.reactionMs)}</td><td>${r.attempts}</td></tr>`;
+    const showKey = this.settings.keyKind !== 'none';
+    $('#col-key').hidden = !showKey;
+    const rows = this.answered.map((q, i) => {
+      const r = q.record!;
+      const key = showKey ? `<td>${keyShort(q.keyFifths)}</td>` : '';
+      return `<tr class="${r.correct ? 'ok' : 'ng'}"><td>${i + 1}</td>${key}<td>${CLEF_LABELS[q.clef].slice(0, 2)}</td><td>${pitchName(q.pitch)}</td><td class="played">${r.correct ? '○' : pitchName(q.firstPlayed!)}</td><td>${formatMs(r.reactionMs)}</td><td>${r.attempts}</td></tr>`;
     });
-    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="5">回答なし</td></tr>';
+    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="7">回答なし</td></tr>';
   }
 
   private showView(view: 'setup' | 'practice' | 'result'): void {
     for (const v of ['setup', 'practice', 'result']) $(`#${v}`).hidden = v !== view;
+  }
+
+  private scrollKeyboardToRange(): void {
+    const s = this.settings;
+    const clefs = s.layout === 'grand' ? CLEFS : [s.layout];
+    const lows = clefs.map((c) => Math.min(s.ranges[c].low, s.ranges[c].high));
+    const highs = clefs.map((c) => Math.max(s.ranges[c].low, s.ranges[c].high));
+    const mid = Math.round((Math.min(...lows) + Math.max(...highs)) / 2);
+    this.keyboard.scrollToNote(pitchToMidi(pitchFromDiatonic(mid)));
   }
 
   private showMidiStatus(status: MidiStatus): void {
@@ -209,38 +278,104 @@ export class App {
 
   private bindSettingsForm(): void {
     const form = $<HTMLFormElement>('#settings');
+    const radio = (name: string) => form.elements.namedItem(name) as RadioNodeList;
     const s = this.settings;
-    (form.elements.namedItem('limitKind') as RadioNodeList).value = s.limitKind;
+
+    for (const clef of CLEFS) {
+      for (const end of ['low', 'high'] as const) {
+        const select = $<HTMLSelectElement>(`#range-${clef}-${end}`);
+        select.innerHTML = rangeOptions(clef);
+        select.value = String(s.ranges[clef][end]);
+      }
+    }
+    $<HTMLSelectElement>('#key-fifths').innerHTML = Array.from(
+      { length: KEY_FIFTHS_RANGE.max - KEY_FIFTHS_RANGE.min + 1 },
+      (_, i) => KEY_FIFTHS_RANGE.min + i,
+    )
+      .map((f) => `<option value="${f}">${keyLabel(f)}</option>`)
+      .join('');
+
+    radio('limitKind').value = s.limitKind;
+    radio('layout').value = s.layout;
+    radio('keyKind').value = s.keyKind;
     $<HTMLInputElement>('#count').value = String(s.count);
     $<HTMLInputElement>('#seconds').value = String(s.seconds);
-    $<HTMLSelectElement>('#ledger').value = String(s.ledgerLines);
+    $<HTMLSelectElement>('#key-fifths').value = String(s.keyFifths);
+    $<HTMLSelectElement>('#key-max').value = String(s.keyMaxAccidentals);
+    $<HTMLInputElement>('#accidentals').checked = s.accidentals;
     $<HTMLInputElement>('#octave-eq').checked = s.octaveEquivalent;
+
     const sync = () => {
+      const range = (clef: Clef): DiatonicRange => {
+        const a = Number($<HTMLSelectElement>(`#range-${clef}-low`).value);
+        const b = Number($<HTMLSelectElement>(`#range-${clef}-high`).value);
+        return { low: Math.min(a, b), high: Math.max(a, b) };
+      };
+      const layout = radio('layout').value as StaffLayout;
+      const keyKind = radio('keyKind').value as Settings['keyKind'];
       this.settings = {
-        limitKind: (form.elements.namedItem('limitKind') as RadioNodeList).value === 'time' ? 'time' : 'count',
+        limitKind: radio('limitKind').value === 'time' ? 'time' : 'count',
         count: clampInt($<HTMLInputElement>('#count').value, 1, 500, DEFAULT_SETTINGS.count),
         seconds: clampInt($<HTMLInputElement>('#seconds').value, 10, 3600, DEFAULT_SETTINGS.seconds),
-        ledgerLines: clampInt($<HTMLSelectElement>('#ledger').value, 0, 4, DEFAULT_SETTINGS.ledgerLines),
+        layout,
+        ranges: { treble: range('treble'), bass: range('bass') },
+        keyKind,
+        keyFifths: clampInt($<HTMLSelectElement>('#key-fifths').value, -7, 7, 0),
+        keyMaxAccidentals: clampInt($<HTMLSelectElement>('#key-max').value, 1, 7, DEFAULT_SETTINGS.keyMaxAccidentals),
+        accidentals: $<HTMLInputElement>('#accidentals').checked,
         octaveEquivalent: $<HTMLInputElement>('#octave-eq').checked,
       };
-      $('#count').closest('label')!.classList.toggle('dim', this.settings.limitKind !== 'count');
-      $('#seconds').closest('label')!.classList.toggle('dim', this.settings.limitKind !== 'time');
+      const dim = (sel: string, off: boolean) => $(sel).classList.toggle('dim', off);
+      dim('#count-label', this.settings.limitKind !== 'count');
+      dim('#seconds-label', this.settings.limitKind !== 'time');
+      dim('#range-treble', layout === 'bass');
+      dim('#range-bass', layout === 'treble');
+      dim('#key-fifths-label', keyKind !== 'fixed');
+      dim('#key-max-label', keyKind !== 'random');
+      $('#mode-label').textContent = `反射モード・${LAYOUT_LABELS[layout]}`;
       saveSettings(this.settings);
     };
-    form.addEventListener('input', sync);
+    form.addEventListener('input', () => {
+      sync();
+      this.scrollKeyboardToRange();
+    });
     form.addEventListener('submit', (e) => e.preventDefault());
     sync();
   }
 }
 
+function keySetting(s: Settings): KeySetting {
+  if (s.keyKind === 'fixed') return { kind: 'fixed', fifths: s.keyFifths };
+  if (s.keyKind === 'random') return { kind: 'random', maxAccidentals: s.keyMaxAccidentals };
+  return { kind: 'none' };
+}
+
+/** 音域のセレクトの選択肢（高い音が上） */
+function rangeOptions(clef: Clef): string {
+  const { low, high } = staffRange(clef, MAX_LEDGER_LINES);
+  const options: string[] = [];
+  for (let d = high; d >= low; d--) {
+    const n = ledgerLinesAt(clef, d);
+    options.push(`<option value="${d}">${pitchName(pitchFromDiatonic(d))}${n ? `（加線${n}本）` : ''}</option>`);
+  }
+  return options.join('');
+}
+
+function keyShort(fifths: number): string {
+  return fifths === 0 ? '—' : fifths > 0 ? `♯${fifths}` : `♭${-fifths}`;
+}
+
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) {
+      const saved = JSON.parse(raw) as Partial<Settings>;
+      return { ...DEFAULT_SETTINGS, ...saved, ranges: { ...DEFAULT_SETTINGS.ranges, ...saved.ranges } };
+    }
   } catch {
     /* 保存領域が使えなくても既定値で動く */
   }
-  return { ...DEFAULT_SETTINGS };
+  return structuredClone(DEFAULT_SETTINGS);
 }
 
 function saveSettings(s: Settings): void {

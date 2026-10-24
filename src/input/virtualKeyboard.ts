@@ -11,7 +11,7 @@ export class VirtualKeyboard {
   constructor(
     private readonly container: HTMLElement,
     private readonly onNote: NoteListener,
-    private readonly low = 48,
+    private readonly low = 24,
     private readonly high = 96,
   ) {
     this.build();

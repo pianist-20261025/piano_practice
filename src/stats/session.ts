@@ -7,6 +7,8 @@ export interface AnswerRecord {
   timestamp: number;
   mode: Mode;
   clef: Clef;
+  /** 調号（♯の数は正、♭の数は負） */
+  keyFifths: number;
   expected: number[];
   /** 最初に押した音 */
   played: number[];

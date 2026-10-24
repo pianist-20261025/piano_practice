@@ -65,7 +65,3 @@ export function pitchName(p: Pitch): string {
 export function toVexKey(p: Pitch): string {
   return `${p.step.toLowerCase()}${ALTER_VEX[p.alter]}/${p.octave}`;
 }
-
-export function vexAccidental(p: Pitch): string | null {
-  return p.alter === 0 ? null : ALTER_VEX[p.alter];
-}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { summarize, type AnswerRecord } from './session';
 
 const rec = (correct: boolean, reactionMs: number): AnswerRecord => ({
-  timestamp: 0, mode: 'reflex', clef: 'treble', expected: [60], played: [correct ? 60 : 62], correct, reactionMs, attempts: correct ? 1 : 2,
+  timestamp: 0, mode: 'reflex', clef: 'treble', keyFifths: 0, expected: [60], played: [correct ? 60 : 62], correct, reactionMs, attempts: correct ? 1 : 2,
 });
 
 describe('summarize', () => {
