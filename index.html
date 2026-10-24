@@ -19,6 +19,31 @@
             <legend>練習モード</legend>
             <label class="radio"><input type="radio" name="mode" value="reflex" /> 反射モード（単音）</label>
             <label class="radio"><input type="radio" name="mode" value="shape" /> 形で読むモード（音程・和音）</label>
+            <label class="radio"><input type="radio" name="mode" value="song" /> 曲モード（MusicXML）</label>
+          </fieldset>
+          <fieldset id="song-settings" hidden>
+            <legend>曲</legend>
+            <div class="row">
+              <label>曲 <select id="song-source"></select></label>
+              <label class="file-button">ファイルを開く（.musicxml / .mxl）<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" hidden /></label>
+            </div>
+            <div class="row">
+              <span class="row-label">進め方</span>
+              <label class="radio"><input type="radio" name="songMode" value="wait" /> 待機（押せるまで止まる）</label>
+              <label class="radio"><input type="radio" name="songMode" value="tempo" /> テンポ（止まらずに進む）</label>
+            </div>
+            <div class="row">
+              <span class="row-label">判定する手</span>
+              <label class="radio"><input type="radio" name="hands" value="both" /> 両手</label>
+              <label class="radio"><input type="radio" name="hands" value="right" /> 右手のみ</label>
+              <label class="radio"><input type="radio" name="hands" value="left" /> 左手のみ</label>
+            </div>
+            <div id="tempo-options" class="row">
+              <label>テンポ ♩= <input id="song-bpm" type="number" min="20" max="240" placeholder="楽譜どおり" /></label>
+              <label>許容するずれ ± <input id="tolerance" type="number" min="20" max="300" step="10" /> ms</label>
+              <label class="check"><input id="metronome" type="checkbox" /> メトロノームを鳴らす（カウントは常に鳴る）</label>
+            </div>
+            <p class="hint-inline">装飾音・繰り返し記号（書かれた順に1回だけ進む）・ペダル・アルペジオのずれは判定しません。タイの後ろ側と、前から伸ばしている音は押し直し不要です。</p>
           </fieldset>
           <fieldset id="shape-settings" hidden>
             <legend>出題する形</legend>
@@ -26,13 +51,13 @@
             <label>和音とみなす時間差 <input id="chord-window" type="number" min="30" max="150" step="10" /> ms
               <span class="hint-inline">（最初の音からこの時間内に押した音を1つの和音として判定）</span></label>
           </fieldset>
-          <fieldset>
+          <fieldset class="drill-only">
             <legend>譜表</legend>
             <label class="radio"><input type="radio" name="layout" value="treble" /> ト音記号</label>
             <label class="radio"><input type="radio" name="layout" value="bass" /> ヘ音記号</label>
             <label class="radio"><input type="radio" name="layout" value="grand" /> 大譜表（上下ランダム）</label>
           </fieldset>
-          <fieldset>
+          <fieldset class="drill-only">
             <legend>音域</legend>
             <div id="range-treble" class="range-row">
               <span class="range-name">ト音記号</span>
@@ -47,7 +72,7 @@
               <select id="range-bass-high" aria-label="ヘ音記号の最高音"></select>
             </div>
           </fieldset>
-          <fieldset>
+          <fieldset class="drill-only">
             <legend>調号・臨時記号</legend>
             <div class="row">
               <label class="radio"><input type="radio" name="keyKind" value="none" /> 調号なし</label>
@@ -72,16 +97,16 @@
           </fieldset>
           <fieldset>
             <legend>出題の長さ・判定</legend>
-            <div class="row">
+            <div class="row drill-only">
               <label class="radio"><input type="radio" name="limitKind" value="count" /> 問題数で区切る</label>
               <label class="radio"><input type="radio" name="limitKind" value="time" /> 時間で区切る</label>
             </div>
-            <div class="row">
+            <div class="row drill-only">
               <label id="count-label">問題数 <input id="count" type="number" min="1" max="500" /> 問</label>
               <label id="seconds-label">制限時間 <input id="seconds" type="number" min="10" max="3600" step="10" /> 秒</label>
             </div>
             <label class="check"><input id="octave-eq" type="checkbox" /> オクターブ違いを正解とみなす</label>
-            <label id="focus-weak-label" class="check"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
+            <label id="focus-weak-label" class="check drill-only"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
           </fieldset>
         </form>
         <div class="actions">
@@ -104,12 +129,25 @@
         </div>
       </section>
 
+      <section id="song" class="panel wide" hidden>
+        <div class="practice-head">
+          <div id="song-progress"></div>
+          <div id="song-title" class="key-name"></div>
+          <button id="song-stop">終了 <kbd>Esc</kbd></button>
+        </div>
+        <div id="score" class="score"></div>
+        <div class="song-foot">
+          <div id="song-staff" class="mini-staff" aria-label="現在の位置（押した音の読み返し）"></div>
+          <div id="song-feedback" aria-live="polite"></div>
+        </div>
+      </section>
+
       <section id="result" class="panel" hidden>
-        <h2>結果</h2>
+        <h2 id="result-title">結果</h2>
         <div id="summary" class="summary"></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>#</th><th id="col-key">調号</th><th>段</th><th>出題</th><th>最初に押した音</th><th>反応時間</th><th>押した回数</th></tr></thead>
+            <thead id="answers-head"></thead>
             <tbody id="answers"></tbody>
           </table>
         </div>

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "opensheetmusicdisplay": "^2.2.1",
     "vexflow": "4.2.5"
   },
   "devDependencies": {

@@ -21,10 +21,21 @@ import {
   parseExportedRecords,
   type RecordStore,
 } from '../stats/store';
+import type { HandSetting } from '../score/steps';
+import { SongPractice, summarizeSong, type SongMode, type SongResult } from './songMode';
 import { renderStats } from './statsView';
 
 interface Settings {
   mode: Mode;
+  /** 曲モード */
+  songMode: SongMode;
+  hands: HandSetting;
+  /** null なら楽譜どおり */
+  songBpm: number | null;
+  toleranceMs: number;
+  metronome: boolean;
+  /** サンプルの id、または 'file'（最後に開いたファイル） */
+  songSource: string;
   /** 形で読むモードで出す形の id */
   shapes: string[];
   /** この時間内に押した音を1つの和音とみなす（ms） */
@@ -45,6 +56,12 @@ interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   mode: 'reflex',
+  songMode: 'wait',
+  hands: 'both',
+  songBpm: null,
+  toleranceMs: 100,
+  metronome: true,
+  songSource: 'minuet',
   shapes: DEFAULT_SHAPE_IDS,
   chordWindowMs: DEFAULT_CHORD_WINDOW_MS,
   limitKind: 'count',
@@ -66,7 +83,17 @@ const MAX_LEDGER_LINES = 4;
 const NEXT_DELAY_MS = 350;
 
 const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
-const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード' };
+const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード', song: '曲モード' };
+const SONG_MODE_LABELS: Record<SongMode, string> = { wait: '待機', tempo: 'テンポ' };
+const HAND_LABELS: Record<HandSetting, string> = { both: '両手', right: '右手', left: '左手' };
+
+/** public/samples の動作確認用の曲 */
+const SAMPLES = [
+  { id: 'minuet', label: 'メヌエット ト長調 BWV Anh. 114（前半）', file: 'samples/minuet-g-bwv-anh114.musicxml' },
+  { id: 'chorale', label: 'コラール BWV 66.6（2段にまとめたもの）', file: 'samples/chorale-bwv66-6.musicxml' },
+];
+/** 最後に開いた MusicXML ファイル（次に開いたときも選べるように保存する） */
+const SONG_FILE_KEY = 'sight-reader:song-file';
 
 interface Question {
   clef: Clef;
@@ -84,8 +111,8 @@ interface Question {
   saved: boolean;
 }
 
-type View = 'setup' | 'practice' | 'result' | 'stats';
-const VIEWS: readonly View[] = ['setup', 'practice', 'result', 'stats'];
+type View = 'setup' | 'practice' | 'song' | 'result' | 'stats';
+const VIEWS: readonly View[] = ['setup', 'practice', 'song', 'result', 'stats'];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -110,6 +137,8 @@ export class App {
   private grouper = new ChordGrouper(DEFAULT_CHORD_WINDOW_MS, (chord) => this.submit(chord.notes, chord.time));
   /** 仮想鍵盤はクリックで1音ずつしか押せないので、和音の音数ぶん集めてから判定する */
   private virtualPending: { notes: number[]; time: number } | null = null;
+  private song!: SongPractice;
+  private songFile: { name: string; data: string } | null = loadSongFile();
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -122,6 +151,20 @@ export class App {
       this.keyboard.setHeld(ev.note, ev.type === 'on');
       if (ev.type === 'on') this.handleNoteOn(ev);
     });
+
+    this.song = new SongPractice($('#score'), $('#song-staff'), {
+      persist: (record) => this.persistRecord(record),
+      finished: (result) => this.finishSong(result),
+      colors: readColors,
+      status: (text) => ($('#song-progress').textContent = text),
+      feedback: (html, kind) => {
+        const el = $('#song-feedback');
+        el.innerHTML = html;
+        el.className = kind;
+      },
+    });
+    $('#song-stop').addEventListener('click', () => this.finishSession());
+    $<HTMLInputElement>('#song-file').addEventListener('change', (e) => this.openSongFile(e.target as HTMLInputElement));
 
     this.bindSettingsForm();
     $('#start').addEventListener('click', () => this.startSession());
@@ -160,7 +203,10 @@ export class App {
   private persist(q: Question): void {
     if (!q.record || q.saved) return;
     q.saved = true;
-    const record = { ...q.record };
+    this.persistRecord({ ...q.record });
+  }
+
+  private persistRecord(record: AnswerRecord): void {
     this.history.push(record);
     this.updateHistoryCount();
     this.store.add(record).catch((e) => {
@@ -221,6 +267,10 @@ export class App {
   // ---- セッション ----
 
   private startSession(): void {
+    if (this.settings.mode === 'song') {
+      void this.startSong();
+      return;
+    }
     this.records = [];
     this.answered = [];
     this.question = null;
@@ -311,6 +361,10 @@ export class App {
   }
 
   private handleNoteOn(ev: NoteEvent): void {
+    if (this.settings.mode === 'song') {
+      if (this.running) this.song.noteOn(ev);
+      return;
+    }
     const q = this.question;
     if (!this.running || this.advancing || !q) return;
     if (q.midis.length === 1) {
@@ -388,10 +442,116 @@ export class App {
 
   private finishSession(): void {
     if (!this.running) return;
+    if (this.settings.mode === 'song') {
+      // 結果は SongPractice から finishSong に届く
+      this.song.stop();
+      return;
+    }
     this.running = false;
     window.clearInterval(this.tickTimer);
     if (this.question) this.persist(this.question);
     this.renderResult();
+    this.showView('result');
+  }
+
+  // ---- 曲モード ----
+
+  private async startSong(): Promise<void> {
+    const s = this.settings;
+    let source: { name: string; data: string };
+    try {
+      source = await this.songSource();
+    } catch (e) {
+      alert(`曲を読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    this.showView('song');
+    $('#song-feedback').textContent = '楽譜を読み込んでいます…';
+    $('#song-progress').textContent = '';
+    try {
+      const title = await this.song.load(source.data, source.name);
+      $('#song-title').textContent = `${title}　${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}`;
+      this.running = true;
+      this.song.start({
+        songMode: s.songMode,
+        hands: s.hands,
+        bpm: s.songBpm,
+        toleranceMs: s.toleranceMs,
+        metronome: s.metronome,
+        judge: { octaveEquivalent: s.octaveEquivalent },
+      });
+    } catch (e) {
+      this.running = false;
+      alert(`曲を始められませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      this.showView('setup');
+    }
+  }
+
+  private async songSource(): Promise<{ name: string; data: string }> {
+    const id = this.settings.songSource;
+    if (id === 'file') {
+      if (!this.songFile) throw new Error('ファイルが選ばれていません');
+      return this.songFile;
+    }
+    const sample = SAMPLES.find((x) => x.id === id) ?? SAMPLES[0];
+    const res = await fetch(import.meta.env.BASE_URL + sample.file);
+    if (!res.ok) throw new Error(`${sample.file} が見つかりません`);
+    return { name: sample.label, data: await res.text() };
+  }
+
+  private async openSongFile(input: HTMLInputElement): Promise<void> {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    // .mxl は zip。OSMD にはバイナリ文字列（1文字=1バイト）で渡す
+    const data = /\.mxl$/i.test(file.name) ? toBinaryString(await file.arrayBuffer()) : await file.text();
+    this.songFile = { name: file.name.replace(/\.(musicxml|xml|mxl)$/i, ''), data };
+    saveSongFile(this.songFile);
+    this.fillSongSources();
+    $<HTMLSelectElement>('#song-source').value = 'file';
+    $<HTMLFormElement>('#settings').dispatchEvent(new Event('input'));
+  }
+
+  private fillSongSources(): void {
+    const options = SAMPLES.map((x) => `<option value="${x.id}">${x.label}</option>`);
+    if (this.songFile) options.push(`<option value="file">${escapeHtml(this.songFile.name)}（開いたファイル）</option>`);
+    $('#song-source').innerHTML = options.join('');
+  }
+
+  private finishSong(result: SongResult): void {
+    this.running = false;
+    const s = summarizeSong(result);
+    $('#result-title').textContent = `結果: ${result.title}`;
+    const tiles = [
+      `<div class="stat"><span class="label">正答率</span><span class="value">${Math.round(s.accuracy * 100)}<small>%</small></span><span class="sub">${s.correct} / ${s.played} か所（全 ${result.totalSteps}）</span></div>`,
+    ];
+    if (result.settings.songMode === 'wait') {
+      tiles.push(
+        `<div class="stat"><span class="label">平均反応時間</span><span class="value">${s.avgReactionMs === null ? '—' : formatMs(s.avgReactionMs)}</span><span class="sub">カーソル到達から最初の押鍵まで</span></div>`,
+      );
+    } else {
+      const t = s.timing;
+      const tendency = t.meanMs === null ? '' : Math.abs(t.meanMs) < 15 ? 'ほぼ中心' : t.meanMs > 0 ? `平均 ${Math.round(t.meanMs)} ms 遅れ気味` : `平均 ${Math.round(-t.meanMs)} ms 走り気味`;
+      tiles.push(
+        `<div class="stat"><span class="label">タイミングOK（±${result.settings.toleranceMs} ms）</span><span class="value">${Math.round(t.onTimeRate * 100)}<small>%</small></span><span class="sub">押せた ${t.count} 音のうち</span></div>`,
+        `<div class="stat"><span class="label">ずれの平均</span><span class="value">${t.meanAbsMs === null ? '—' : `${Math.round(t.meanAbsMs)} ms`}</span><span class="sub">${tendency}（♩=${Math.round(result.bpm)}）</span></div>`,
+      );
+    }
+    $('#summary').innerHTML = tiles.join('');
+    $('#answers-head').innerHTML = '<tr><th>小節</th><th>音</th><th>足りない音</th><th>余計な音</th><th>ずれ / 反応</th></tr>';
+    const spell = (o: SongResult['outcomes'][number], midis: number[]) =>
+      midis.map((m) => pitchName(spellMidiInKey(m, result.keyFifthsAt(o.step.entryIndex)))).join('・');
+    const rows = result.outcomes
+      .filter((o) => !o.correct)
+      .map((o) => {
+        const timing = o.deviations.length
+          ? o.deviations.map((d) => `${d > 0 ? '+' : ''}${Math.round(d)}`).join(' / ') + ' ms'
+          : o.reactionMs !== null
+            ? formatMs(o.reactionMs)
+            : '';
+        return `<tr class="ng"><td>${o.step.measureNumber}</td><td>${spell(o, o.step.notes.map((n) => n.midi))}</td><td class="missing-cell">${spell(o, o.missing) || '—'}</td><td class="played">${spell(o, o.extras) || '—'}</td><td class="small">${timing}</td></tr>`;
+      });
+    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="5">間違えた箇所はありません</td></tr>';
     this.showView('result');
   }
 
@@ -408,6 +568,9 @@ export class App {
 
   private renderResult(): void {
     const s = summarize(this.records);
+    $('#result-title').textContent = '結果';
+    $('#answers-head').innerHTML =
+      '<tr><th>#</th><th id="col-key">調号</th><th>段</th><th>出題</th><th>最初に押した音</th><th>反応時間</th><th>押した回数</th></tr>';
     $('#summary').innerHTML = `
       <div class="stat"><span class="label">正答率</span><span class="value">${s.total ? Math.round(s.accuracy * 100) : 0}<small>%</small></span><span class="sub">${s.correct} / ${s.total} 問</span></div>
       <div class="stat"><span class="label">平均反応時間</span><span class="value">${s.avgReactionMs === null ? '—' : formatMs(s.avgReactionMs)}</span><span class="sub">全問の最初の押鍵まで</span></div>
@@ -484,6 +647,13 @@ export class App {
     ).join('');
     form.querySelectorAll<HTMLInputElement>('input[name=shape]').forEach((el) => (el.checked = s.shapes.includes(el.value)));
     $<HTMLInputElement>('#chord-window').value = String(s.chordWindowMs);
+    this.fillSongSources();
+    $<HTMLSelectElement>('#song-source').value = s.songSource === 'file' && !this.songFile ? SAMPLES[0].id : s.songSource;
+    radio('songMode').value = s.songMode;
+    radio('hands').value = s.hands;
+    $<HTMLInputElement>('#song-bpm').value = s.songBpm === null ? '' : String(s.songBpm);
+    $<HTMLInputElement>('#tolerance').value = String(s.toleranceMs);
+    $<HTMLInputElement>('#metronome').checked = s.metronome;
     radio('mode').value = s.mode;
     radio('limitKind').value = s.limitKind;
     radio('layout').value = s.layout;
@@ -505,9 +675,17 @@ export class App {
       const layout = radio('layout').value as StaffLayout;
       const keyKind = radio('keyKind').value as Settings['keyKind'];
       const checkedShapes = [...form.querySelectorAll<HTMLInputElement>('input[name=shape]:checked')].map((el) => el.value);
-      const mode: Mode = radio('mode').value === 'shape' ? 'shape' : 'reflex';
+      const modeValue = radio('mode').value;
+      const mode: Mode = modeValue === 'shape' || modeValue === 'song' ? modeValue : 'reflex';
+      const bpmRaw = $<HTMLInputElement>('#song-bpm').value.trim();
       this.settings = {
         mode,
+        songMode: radio('songMode').value === 'tempo' ? 'tempo' : 'wait',
+        hands: (['right', 'left'] as const).find((h) => h === radio('hands').value) ?? 'both',
+        songBpm: bpmRaw ? clampInt(bpmRaw, 20, 240, 80) : null,
+        toleranceMs: clampInt($<HTMLInputElement>('#tolerance').value, 20, 300, DEFAULT_SETTINGS.toleranceMs),
+        metronome: $<HTMLInputElement>('#metronome').checked,
+        songSource: $<HTMLSelectElement>('#song-source').value || SAMPLES[0].id,
         shapes: checkedShapes.length ? checkedShapes : DEFAULT_SHAPE_IDS,
         chordWindowMs: clampInt(
           $<HTMLInputElement>('#chord-window').value,
@@ -534,8 +712,14 @@ export class App {
       dim('#range-bass', layout === 'treble');
       dim('#key-fifths-label', keyKind !== 'fixed');
       dim('#key-max-label', keyKind !== 'random');
-      $('#mode-label').textContent = `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
+      $('#mode-label').textContent =
+        mode === 'song'
+          ? `${MODE_LABELS[mode]}・${SONG_MODE_LABELS[this.settings.songMode]}`
+          : `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
       $('#shape-settings').hidden = mode !== 'shape';
+      $('#song-settings').hidden = mode !== 'song';
+      form.querySelectorAll<HTMLElement>('.drill-only').forEach((el) => (el.hidden = mode === 'song'));
+      dim('#tempo-options', this.settings.songMode !== 'tempo');
       dim('#focus-weak-label', mode !== 'reflex');
       this.grouper.setWindow(this.settings.chordWindowMs);
       saveSettings(this.settings);
@@ -547,6 +731,34 @@ export class App {
     form.addEventListener('submit', (e) => e.preventDefault());
     sync();
   }
+}
+
+function loadSongFile(): { name: string; data: string } | null {
+  try {
+    const raw = localStorage.getItem(SONG_FILE_KEY);
+    return raw ? (JSON.parse(raw) as { name: string; data: string }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSongFile(file: { name: string; data: string }): void {
+  try {
+    localStorage.setItem(SONG_FILE_KEY, JSON.stringify(file));
+  } catch {
+    /* 大きすぎて保存できなくても、このタブの間は使える */
+  }
+}
+
+function toBinaryString(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return out;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
 function names(pitches: readonly Pitch[]): string {

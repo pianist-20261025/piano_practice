@@ -11,6 +11,7 @@ import {
 import { SHAPES, shapeById } from '../generator/shape';
 import { summarize, type AnswerRecord } from '../stats/session';
 import { aggregateShapeStats } from '../stats/shapeStats';
+import { aggregateSongStats } from '../stats/songStats';
 
 /** 誤答率の区切り。ヒートマップの色の段階（0〜4）に対応 */
 const MISS_BINS = [0, 0.1, 0.25, 0.5];
@@ -31,16 +32,19 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
   const stats = aggregateNoteStats(records);
   const overall = overallAvgCorrectMs(stats.values());
   const all = summarize(records);
+  // 反応時間は反射・形のモードだけ（曲のテンポモードの「ずれ」は意味が違うので混ぜない）
+  const drill = summarize(records.filter((r) => r.mode !== 'song'));
   const shapeStats = aggregateShapeStats(records);
+  const songStats = aggregateSongStats(records);
 
   const tiles = `
     <div class="summary">
       <div class="stat"><span class="label">記録した回答</span><span class="value">${all.total}<small>問</small></span><span class="sub">${countDays(records)} 日分</span></div>
       <div class="stat"><span class="label">正答率（全期間）</span><span class="value">${all.total ? Math.round(all.accuracy * 100) : 0}<small>%</small></span><span class="sub">${all.correct} / ${all.total} 問</span></div>
-      <div class="stat"><span class="label">正解時の平均反応</span><span class="value">${fmtMs(all.avgCorrectReactionMs)}</span><span class="sub">全期間</span></div>
+      <div class="stat"><span class="label">正解時の平均反応</span><span class="value">${fmtMs(drill.avgCorrectReactionMs)}</span><span class="sub">反射・形のモード、全期間</span></div>
     </div>`;
 
-  if (!stats.size && !shapeStats.length) {
+  if (!stats.size && !shapeStats.length && !songStats.length) {
     container.innerHTML = `${tiles}<p class="empty">まだ記録がありません。練習すると、音ごとの正答率と反応時間がここに出ます。</p>`;
     return;
   }
@@ -61,8 +65,25 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
       </table>
     </div>`
     : '';
+  const songSection = songStats.length
+    ? `<h3>曲ごとの記録（曲モード）</h3>
+    <p class="note-text">「か所」は判定した位置（和音は1か所）の数。全期間で計算。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>曲</th><th class="num">か所</th><th class="num">正答率</th><th>間違えやすい小節</th><th class="num">ずれの平均</th><th>最後に練習</th></tr></thead>
+        <tbody>${songStats
+          .map(
+            (x) => `<tr><td class="note">${escapeHtml(x.song)}</td><td class="num">${x.count}</td><td class="num">${Math.round(x.accuracy * 100)}%</td>
+              <td>${x.weakMeasures.map((w) => `${w.measure}小節（${w.errors}回）`).join('、') || '—'}</td>
+              <td class="num">${x.meanAbsTimingMs === null ? '—' : `${Math.round(x.meanAbsTimingMs)} ms`}</td>
+              <td>${new Date(x.lastPracticed).toLocaleDateString()}</td></tr>`,
+          )
+          .join('')}</tbody>
+      </table>
+    </div>`
+    : '';
   if (!stats.size) {
-    container.innerHTML = `${tiles}${shapeSection}`;
+    container.innerHTML = `${tiles}${shapeSection}${songSection}`;
     return;
   }
 
@@ -105,7 +126,8 @@ export function renderStats(container: HTMLElement, records: readonly AnswerReco
         <tbody>${weakRows}</tbody>
       </table>
     </div>
-    ${shapeSection}`;
+    ${shapeSection}
+    ${songSection}`;
 
   attachTooltip(container, stats, overall);
 }
@@ -167,6 +189,10 @@ function confusionText(s: NoteStat): string {
     .slice(0, 3)
     .map((c) => `${pitchName(spellMidi(c.midi, undefined))}×${c.count}`)
     .join('、');
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
 function countDays(records: readonly AnswerRecord[]): number {

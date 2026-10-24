@@ -25,6 +25,8 @@ export interface StaffView {
   expected: { pitch: Pitch; state: NoteState }[];
   /** 押すべきでないのに押した音。期待音のすぐ右に赤で重ねる */
   extra?: Pitch[];
+  /** 大譜表で音ごとに段を決める（曲モード用）。なければすべて clef の段に書く */
+  noteClef?: (pitch: Pitch) => Clef;
 }
 
 export interface StaffColors {
@@ -35,7 +37,8 @@ export interface StaffColors {
 }
 
 const SCALE = 1.8;
-const MARGIN_X = 10;
+/** 大譜表の括弧が切れない左右の余白 */
+const MARGIN_X = 24;
 /** 五線の上の余白（VexFlow の Stave は y から線4本ぶん下に第5線を引く） */
 const MARGIN_TOP = 30;
 /** 1段ぶんの高さ（余白込み） */
@@ -61,23 +64,30 @@ export class StaffRenderer {
   render(view: StaffView): void {
     const colors = this.colors();
     const stateColor: Record<NoteState, string> = { pending: colors.ink, correct: colors.correct, missing: colors.missing };
-    const expected = makeChord(
-      view.clef,
-      view.expected.map((e) => ({ pitch: e.pitch, color: stateColor[e.state] })),
-      view.keyFifths,
-      colors.ink,
-    );
-    const played = view.extra?.length
-      ? makeChord(view.clef, view.extra.map((pitch) => ({ pitch, color: colors.wrong })), view.keyFifths, colors.wrong)
-      : null;
+    const clefs: readonly Clef[] = view.layout === 'grand' ? ['treble', 'bass'] : [view.layout];
+    const clefOf = (p: Pitch): Clef => (view.layout === 'grand' && view.noteClef ? view.noteClef(p) : view.clef);
+
+    // 段ごとに、期待音の和音と押した音（余計な音）の和音を作る
+    const chords = clefs.map((clef) => {
+      const exp = view.expected.filter((e) => clefOf(e.pitch) === clef);
+      const ext = (view.extra ?? []).filter((p) => clefOf(p) === clef);
+      return {
+        clef,
+        expected: exp.length
+          ? makeChord(clef, exp.map((e) => ({ pitch: e.pitch, color: stateColor[e.state] })), view.keyFifths, colors.ink)
+          : null,
+        played: ext.length ? makeChord(clef, ext.map((pitch) => ({ pitch, color: colors.wrong })), view.keyFifths, colors.wrong) : null,
+      };
+    });
 
     // 五線から大きく外れた音（押し間違いで低すぎる音など）も切れないよう、上下の余白を広げる。
     // 大譜表では上段の音が上に、下段の音が下にはみ出す分だけを見る
-    const lines = [expected, played].flatMap((n) => (n ? n.getKeyProps().map((k) => k.line) : []));
-    const growsUp = view.layout !== 'grand' || view.clef === 'treble';
-    const growsDown = view.layout !== 'grand' || view.clef === 'bass';
-    const above = growsUp ? Math.max(0, Math.max(...lines) - 11) * LINE_SPACE : 0;
-    const below = growsDown ? Math.max(0, -4 - Math.min(...lines)) * LINE_SPACE : 0;
+    const linesOf = (clef: Clef) =>
+      chords.filter((c) => c.clef === clef).flatMap((c) => [c.expected, c.played].flatMap((n) => (n ? n.getKeyProps().map((k) => k.line) : [])));
+    const upper = linesOf(clefs[0]);
+    const lower = linesOf(clefs[clefs.length - 1]);
+    const above = upper.length ? Math.max(0, Math.max(...upper) - 11) * LINE_SPACE : 0;
+    const below = lower.length ? Math.max(0, -4 - Math.min(...lower)) * LINE_SPACE : 0;
     const baseHeight = view.layout === 'grand' ? SINGLE_HEIGHT + GRAND_GAP : SINGLE_HEIGHT;
 
     this.container.replaceChildren();
@@ -100,19 +110,23 @@ export class StaffRenderer {
       staves[view.layout] = makeStave(ctx, view.layout, top, view.keyFifths);
     }
 
-    const stave = staves[view.clef]!;
-    // 音符は調号の後ろの空きの中央あたりに置く
-    const free = stave.getX() + stave.getWidth() - stave.getNoteStartX();
-    const x = free / 2 - PLAYED_SHIFT / 2 - 10;
-    place(ctx, stave, expected, x);
-    expected.draw();
-    if (played) {
-      place(ctx, stave, played, 0);
-      // 2度で横にずれた符頭や臨時記号があっても重ならないよう、実際の幅から間隔を決める
-      const e = expected.getMetrics();
-      const gap = e.notePx + e.rightDisplacedHeadPx + e.modRightPx + played.getMetrics().modLeftPx + PLAYED_GAP;
-      played.getTickContext().setX(x + Math.max(PLAYED_SHIFT, gap));
-      played.draw();
+    // 音符は調号の後ろの空きの中央あたりに置く（どの段も調号の幅は同じ）
+    const first = staves[clefs[0]]!;
+    const x = (first.getX() + first.getWidth() - first.getNoteStartX()) / 2 - PLAYED_SHIFT / 2 - 10;
+    for (const c of chords) {
+      const stave = staves[c.clef]!;
+      if (c.expected) {
+        place(ctx, stave, c.expected, x);
+        c.expected.draw();
+      }
+      if (c.played) {
+        place(ctx, stave, c.played, 0);
+        // 2度で横にずれた符頭や臨時記号があっても重ならないよう、実際の幅から間隔を決める
+        const e = c.expected?.getMetrics();
+        const gap = e ? e.notePx + e.rightDisplacedHeadPx + e.modRightPx + c.played.getMetrics().modLeftPx + PLAYED_GAP : 0;
+        c.played.getTickContext().setX(x + Math.max(PLAYED_SHIFT, gap));
+        c.played.draw();
+      }
     }
   }
 }

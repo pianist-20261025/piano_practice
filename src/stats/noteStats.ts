@@ -29,7 +29,8 @@ export const statKey = (clef: Clef, midi: number) => `${clef}:${midi}`;
 export function aggregateNoteStats(records: readonly AnswerRecord[], window = RECENT_WINDOW): Map<string, NoteStat> {
   const groups = new Map<string, AnswerRecord[]>();
   for (const r of records) {
-    if (r.expected.length !== 1) continue;
+    // 音ごとの統計と苦手音の重み付けは反射モードの記録だけで行う（曲の中の音は文脈が違うため）
+    if (r.mode !== 'reflex' || r.expected.length !== 1) continue;
     const key = statKey(r.clef, r.expected[0]);
     const list = groups.get(key);
     if (list) list.push(r);

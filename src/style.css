@@ -53,6 +53,8 @@
 }
 
 * { box-sizing: border-box; }
+/* display を指定した要素でも hidden 属性で隠れるように */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -97,7 +99,7 @@ fieldset {
 }
 legend { padding: 0 6px; font-size: 13px; color: var(--muted); }
 label { display: flex; align-items: center; gap: 8px; font-size: 15px; }
-label.dim, .range-row.dim { opacity: 0.4; }
+label.dim, .range-row.dim, .row.dim { opacity: 0.4; }
 fieldset .row { display: flex; flex-wrap: wrap; gap: 12px 24px; width: 100%; }
 .range-row { display: flex; align-items: center; gap: 8px; width: 100%; }
 .range-name { width: 6em; font-size: 15px; }
@@ -168,7 +170,7 @@ kbd { margin-left: 6px; font-size: 11px; opacity: 0.7; font-family: inherit; }
 .table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
 th, td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--line); }
-th { position: sticky; top: 0; background: var(--surface); font-weight: 500; color: var(--muted); }
+th { white-space: nowrap; position: sticky; top: 0; background: var(--surface); font-weight: 500; color: var(--muted); }
 tr.ng td.played { color: var(--wrong); font-weight: 600; }
 tr.ok td.played { color: var(--correct); }
 .actions { display: flex; gap: 12px; margin-top: 20px; }
@@ -277,3 +279,24 @@ td.note { font-weight: 600; }
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
   pointer-events: none;
 }
+
+/* 曲モード */
+.panel.wide { max-width: 1200px; }
+.row-label { width: 6em; font-size: 15px; color: var(--muted); }
+.score {
+  max-height: 58vh;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  /* OSMD は黒で描くので、ダークモードでも紙の色にする */
+  background: #fffdf8;
+  color: #1d1d1f;
+}
+.song-foot { display: flex; gap: 20px; align-items: center; margin-top: 12px; }
+.mini-staff { flex: 0 0 auto; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); }
+.mini-staff svg { width: 300px !important; height: auto !important; display: block; }
+#song-feedback { font-size: 20px; font-weight: 600; }
+#song-feedback.ok { color: var(--correct); }
+#song-feedback.ng { color: var(--wrong); }
+#song-progress { font-variant-numeric: tabular-nums; color: var(--muted); }
+#answers td.small { font-size: 12px; color: var(--muted); }

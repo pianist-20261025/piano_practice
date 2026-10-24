@@ -1,14 +1,24 @@
 import type { Clef } from '../music/clef';
 
-/** reflex=反射モード（単音）、shape=形で読むモード（音程・和音） */
-export type Mode = 'reflex' | 'shape';
+/** reflex=反射モード（単音）、shape=形で読むモード（音程・和音）、song=曲モード（MusicXML） */
+export type Mode = 'reflex' | 'shape' | 'song';
 
-/** 1問ごとの記録。正誤と反応時間は最初の押鍵で決める。 */
+/**
+ * 1問（曲モードでは1ステップ）ごとの記録。正誤と反応時間は最初の押鍵で決める。
+ * 曲モードの反応時間は、待機モードならカーソル到達から最初の押鍵まで、テンポモードならタイミングのずれ。
+ */
 export interface AnswerRecord {
   timestamp: number;
   mode: Mode;
   /** 形で読むモードの形の id（3rd, triad-root など） */
   shape?: string;
+  /** 曲モード: 曲名、小節番号、待機/テンポ、判定した手 */
+  song?: string;
+  measure?: number;
+  songMode?: 'wait' | 'tempo';
+  hands?: 'right' | 'left' | 'both';
+  /** 曲モード（テンポ）: 押せた音のタイミングのずれの平均（ms、負なら早い） */
+  timingMs?: number;
   clef: Clef;
   /** 調号（♯の数は正、♭の数は負） */
   keyFifths: number;
