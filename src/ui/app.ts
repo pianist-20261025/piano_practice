@@ -188,6 +188,7 @@ export class App {
       },
     });
     $('#song-stop').addEventListener('click', () => this.finishSession());
+    $('#song-skip').addEventListener('click', () => this.song.skip());
     this.flow = new FlowPractice($('#flow-viewport'), $('#flow-strip'), {
       persist: (record) => this.persistRecord(record),
       finished: (result) => this.finishFlow(result),
@@ -211,6 +212,7 @@ export class App {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Enter' && !this.running && !isFormControl(e.target)) this.startSession();
       if (e.code === 'Escape' && this.running) this.finishSession();
+      if (e.code === 'ArrowRight' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.skip();
     });
     $('#show-stats').addEventListener('click', () => this.openStats());
     $('#result-stats').addEventListener('click', () => this.openStats());
@@ -571,6 +573,7 @@ export class App {
     $('#song-progress').textContent = '';
     try {
       const title = await this.song.load(source.data, source.name);
+      $('#song-skip').hidden = s.songMode !== 'wait';
       $('#song-title').textContent = `${title}　${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}`;
       this.running = true;
       this.song.start({

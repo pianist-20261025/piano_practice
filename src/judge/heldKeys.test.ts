@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heldByOtherHand } from './heldKeys';
+import { heldByOtherHand, heldFromBefore } from './heldKeys';
 
 describe('heldByOtherHand', () => {
   const left = { hand: 'left' as const, pressedAt: 1000 };
@@ -20,5 +20,16 @@ describe('heldByOtherHand', () => {
 
   it('どの手の音として押したか分からない鍵盤（余計な音など）は false', () => {
     expect(heldByOtherHand('right', undefined, 1000, 2000)).toBe(false);
+  });
+});
+
+describe('heldFromBefore', () => {
+  it('この位置より前から押さえていれば true（手は問わない）', () => {
+    expect(heldFromBefore(1000, 2000)).toBe(true);
+  });
+
+  it('押さえていない、この位置で押したものは false', () => {
+    expect(heldFromBefore(undefined, 2000)).toBe(false);
+    expect(heldFromBefore(2500, 2000)).toBe(false);
   });
 });

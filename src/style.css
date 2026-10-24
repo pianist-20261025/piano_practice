@@ -125,6 +125,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 kbd { margin-left: 6px; font-size: 11px; opacity: 0.7; font-family: inherit; }
 
 .practice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.head-buttons { display: flex; gap: 8px; }
 #progress { font-variant-numeric: tabular-nums; color: var(--muted); }
 .staff {
   display: flex;
@@ -298,6 +299,7 @@ td.note { font-weight: 600; }
 #song-feedback { font-size: 20px; font-weight: 600; }
 #song-feedback.ok { color: var(--correct); }
 #song-feedback.ng { color: var(--wrong); }
+#song-feedback .missing { color: var(--missing); }
 #song-progress { font-variant-numeric: tabular-nums; color: var(--muted); }
 #answers td.small { font-size: 12px; color: var(--muted); }
 
