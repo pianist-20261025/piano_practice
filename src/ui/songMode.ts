@@ -36,6 +36,8 @@ const LOOKAHEAD_STEPS = 4;
  * 持ち替えて弾き直す人はこの間に鍵盤を離すので区別できる。カーソルが進むのを待っている人も止まらない
  */
 const SETTLE_MS = 250;
+/** 押さえたままの鍵盤を確かめる間に離したとき、弾き直しをさらに待つ時間 */
+const RELEASED_GRACE_MS = 500;
 /** 同じ位置で何も起きないまま、足りない音を示すまでの時間 */
 const HINT_MS = 2500;
 
@@ -324,14 +326,24 @@ export class SongPractice {
     return false;
   }
 
-  /** blocked / held の音だけが残ったとき、少し待ってから（弾き直さなければ）弾けたことにして進める */
-  private scheduleSettle(step: Step): void {
+  /**
+   * blocked / held の音だけが残ったとき、少し待ってから（弾き直さなければ）弾けたことにして進める。
+   * 待つ間に鍵盤を離した（書かれた長さで離した、または持ち替えるつもり）なら、もう少しだけ弾き直しを待ち、
+   * それでも弾き直さなければ弾けたことにする（この位置が来たときには押さえていたので、音は鳴っていた）。
+   * ここで止まったままにすると、何か押すまで進まなくなる
+   */
+  private scheduleSettle(step: Step, final = false): void {
     window.clearTimeout(this.settleTimer);
-    this.settleTimer = window.setTimeout(() => {
-      if (!this.running || this.steps[this.current] !== step || this.waitJudge!.done) return;
-      this.creditOptional(step, false, true);
-      if (this.waitJudge!.done) this.finishWaitStep(step);
-    }, SETTLE_MS);
+    this.settleTimer = window.setTimeout(
+      () => {
+        if (!this.running || this.steps[this.current] !== step || this.waitJudge!.done) return;
+        if (final) this.creditOptional(step, true);
+        else this.creditOptional(step, false, true);
+        if (this.waitJudge!.done) this.finishWaitStep(step);
+        else if (!final && this.awaitingSettle(step)) this.scheduleSettle(step, true);
+      },
+      final ? RELEASED_GRACE_MS : SETTLE_MS,
+    );
   }
 
   /**
