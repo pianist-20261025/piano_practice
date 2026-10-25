@@ -9,6 +9,7 @@ import type { Clef } from '../music/clef';
 import { spellMidiInKey } from '../music/key';
 import { pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type NoteState, type StaffColors } from '../render/staffRenderer';
+import { excerptEntries, excerptLabel, type ExcerptRange } from '../score/excerpt';
 import { OsmdScore, type LoadedScore } from '../score/osmdScore';
 import { buildSteps, type HandSetting, type Step, type StepNote } from '../score/steps';
 import type { AnswerRecord } from '../stats/session';
@@ -56,6 +57,10 @@ export interface SongResult {
   bpm: number;
   totalSteps: number;
   outcomes: StepOutcome[];
+  /** 抜粋して弾いたときの範囲（曲全体なら null） */
+  range: ExcerptRange | null;
+  /** 抜粋の範囲の表示（「小節 5〜7」など）。曲全体なら '' */
+  rangeLabel: string;
   keyFifthsAt: (entryIndex: number) => number;
 }
 
@@ -89,6 +94,12 @@ export class SongPractice {
   /** records のうち保存済みの数 */
   private saved = 0;
   private running = false;
+  /** 抜粋して弾いている範囲（曲全体なら null） */
+  private range: ExcerptRange | null = null;
+  /** 楽譜をいま抜粋で描いているか */
+  private drawnExcerpt = false;
+  /** テンポモードで、カウントの基準にする時刻（抜粋の最初の小節の頭）。曲全体なら null */
+  private zeroTime: number | null = null;
 
   // 待機モード
   private current = 0;
@@ -136,6 +147,7 @@ export class SongPractice {
   /** 楽譜を読み込んで表示する。曲名を返す */
   async load(xml: string, fallbackTitle: string): Promise<string> {
     this.loaded = await this.score.load(xml);
+    this.drawnExcerpt = false;
     this.title = this.loaded.title || fallbackTitle;
     return this.title;
   }
@@ -144,11 +156,30 @@ export class SongPractice {
     return this.loaded?.bpm ?? null;
   }
 
-  start(settings: SongSettings): void {
+  /** 曲全体の判定するステップ（抜粋する範囲を選ぶのに使う） */
+  allSteps(hands: HandSetting): Step[] {
+    return this.loaded ? buildSteps(this.loaded.entries, hands) : [];
+  }
+
+  /** 範囲の表示（「小節 5〜7」など） */
+  rangeLabel(range: ExcerptRange, hands: HandSetting): string {
+    return this.loaded ? excerptLabel(this.allSteps(hands), this.loaded.entries, range) : '';
+  }
+
+  /** 曲全体、または range の小節だけ（抜粋）を弾き始める。抜粋では、その小節だけを描き直す */
+  start(settings: SongSettings, range: ExcerptRange | null = null): void {
     if (!this.loaded) throw new Error('楽譜が読み込まれていません');
     this.settings = settings;
-    this.steps = buildSteps(this.loaded.entries, settings.hands);
+    this.range = range;
+    const entries = range ? excerptEntries(this.loaded.entries, range) : this.loaded.entries;
+    this.steps = buildSteps(entries, settings.hands);
     if (!this.steps.length) throw new Error('判定する音がありません（片手モードの手の選び方を確かめてください）');
+    this.zeroTime = range ? entries[0].time : null;
+    if (range || this.drawnExcerpt) {
+      // 描き直すと前の色も消える（同じ抜粋をもう一度弾くときも）
+      this.score.showMeasures(range);
+      this.drawnExcerpt = range !== null;
+    }
     this.outcomes = [];
     this.records = [];
     this.saved = 0;
@@ -178,6 +209,8 @@ export class SongPractice {
       bpm: this.bpm,
       totalSteps: this.steps.length,
       outcomes: this.outcomes,
+      range: this.range,
+      rangeLabel: this.range ? this.rangeLabel(this.range, this.settings!.hands) : '',
       keyFifthsAt: this.loaded!.keyFifthsAt,
     });
   }
@@ -454,7 +487,8 @@ export class SongPractice {
     // カウントは1小節（4分音符で数える）
     const countIn = Math.max(1, Math.round((numerator * 4) / denominator));
     const origin = performance.now() + 400 + countIn * this.beatMs;
-    const zero = this.steps[0].time - (this.steps[0].time % ((numerator * 4) / denominator));
+    // 抜粋は最初の小節の頭から数える（休符から始まる小節もあるため）
+    const zero = this.zeroTime ?? this.steps[0].time - (this.steps[0].time % ((numerator * 4) / denominator));
     this.stepTimes = this.steps.map((s) => origin + (s.time - zero) * this.beatMs);
     const targets: TimedTarget[] = [];
     this.targetOf = [];

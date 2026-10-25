@@ -22,10 +22,11 @@ import {
   type RecordStore,
 } from '../stats/store';
 import { SongLibrary, loadBundledSongs, readSongFile, songTitle, type BundledSong, type LibrarySong } from '../score/library';
+import { pickExcerpt, type ExcerptRange } from '../score/excerpt';
 import type { HandSetting } from '../score/steps';
 import type { Rhythm } from '../generator/phrase';
 import { FlowPractice, summarizeFlow, type FlowResult } from './flowMode';
-import { SongPractice, summarizeSong, type SongMode, type SongResult } from './songMode';
+import { SongPractice, summarizeSong, type SongMode, type SongResult, type SongSettings } from './songMode';
 import { fullscreenSupported, isFullscreen, isIPad, isStandalone, onFullscreenChange, toggleFullscreen } from './platform';
 import { renderStats } from './statsView';
 
@@ -34,6 +35,11 @@ interface Settings {
   /** 曲モード */
   songMode: SongMode;
   hands: HandSetting;
+  /** 曲全体を弾くか、ランダムに抜き出した数小節（抜粋）を弾くか */
+  songRange: SongRange;
+  /** 抜粋する小節数（最小〜最大） */
+  excerptMin: number;
+  excerptMax: number;
   /** null なら楽譜どおり */
   songBpm: number | null;
   toleranceMs: number;
@@ -68,6 +74,9 @@ const DEFAULT_SETTINGS: Settings = {
   mode: 'reflex',
   songMode: 'wait',
   hands: 'both',
+  songRange: 'whole',
+  excerptMin: 1,
+  excerptMax: 3,
   songBpm: null,
   toleranceMs: 100,
   metronome: true,
@@ -99,6 +108,9 @@ const NEXT_DELAY_MS = 350;
 const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
 const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード', song: '曲モード', flow: '流れ読みモード' };
 const SONG_MODE_LABELS: Record<SongMode, string> = { wait: '待機', tempo: 'テンポ' };
+type SongRange = 'whole' | 'excerpt';
+/** 抜粋する小節数の上限 */
+const EXCERPT_MAX_MEASURES = 8;
 const HAND_LABELS: Record<HandSetting, string> = { both: '両手', right: '右手', left: '左手' };
 
 /** samples/index.json が読めなかったときの同梱曲 */
@@ -161,6 +173,11 @@ export class App {
   private songLibrary = new SongLibrary();
   private bundledSongs: BundledSong[] = [];
   private librarySongs: LibrarySong[] = [];
+  /**
+   * 抜粋の練習中の状態。results は弾き終えた抜粋の結果（弾き直しも1回に数える）。
+   * between は、1つの抜粋を弾き終えて「もう一度 / 次の抜粋」を待っているところ
+   */
+  private excerpt: { results: SongResult[]; range: ExcerptRange | null; between: boolean; ending: boolean } | null = null;
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -192,6 +209,8 @@ export class App {
     $('#song-stop').addEventListener('click', () => this.finishSession());
     $('#song-skip').addEventListener('click', () => this.song.skip());
     $('#song-back').addEventListener('click', () => this.song.back());
+    $('#excerpt-retry').addEventListener('click', () => this.playExcerpt(true));
+    $('#excerpt-next').addEventListener('click', () => this.playExcerpt(false));
     // タブを閉じる・切り替えるときに、曲モードのまだ保存していない記録を保存する
     document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && this.song.flush());
     this.flow = new FlowPractice($('#flow-viewport'), $('#flow-strip'), {
@@ -216,6 +235,12 @@ export class App {
     $('#back').addEventListener('click', () => this.showView('setup'));
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Enter' && !this.running && !isFormControl(e.target)) this.startSession();
+      // 抜粋を弾き終えたところ: Enter は目立たせているほう（弾けたら次、間違えたらもう一度）
+      if (this.excerpt?.between && !isFormControl(e.target)) {
+        if (e.code === 'KeyR') this.playExcerpt(true);
+        if (e.code === 'KeyN') this.playExcerpt(false);
+        if (e.code === 'Enter') this.playExcerpt($('#excerpt-retry').classList.contains('primary'));
+      }
       if (e.code === 'Escape' && this.running) this.finishSession();
       if (e.code === 'ArrowRight' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.skip();
       if (e.code === 'ArrowLeft' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.back();
@@ -494,6 +519,14 @@ export class App {
   private finishSession(): void {
     if (!this.running) return;
     if (this.settings.mode === 'song') {
+      if (this.excerpt) {
+        this.excerpt.ending = true;
+        // 抜粋と抜粋の間なら、ここまでの結果をそのまま出す
+        if (this.excerpt.between) {
+          this.finishExcerpts();
+          return;
+        }
+      }
       // 結果は SongPractice から finishSong に届く
       this.song.stop();
       return;
@@ -580,23 +613,89 @@ export class App {
     $('#song-progress').textContent = '';
     try {
       const title = await this.song.load(source.data, source.name);
-      $('#song-skip').hidden = s.songMode !== 'wait';
-      $('#song-back').hidden = s.songMode !== 'wait';
-      $('#song-title').innerHTML = `${escapeHtml(title)}<span class="tag">${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}</span>`;
+      this.songTitle = title;
+      $('#excerpt-actions').hidden = true;
       this.running = true;
-      this.song.start({
-        songMode: s.songMode,
-        hands: s.hands,
-        bpm: s.songBpm,
-        toleranceMs: s.toleranceMs,
-        metronome: s.metronome,
-        judge: { octaveEquivalent: s.octaveEquivalent },
-      });
+      if (s.songRange === 'excerpt') {
+        this.excerpt = { results: [], range: null, between: false, ending: false };
+        this.playExcerpt(false);
+        return;
+      }
+      this.excerpt = null;
+      this.showSongHead('');
+      this.song.start(this.songSettings());
     } catch (e) {
       this.running = false;
+      this.excerpt = null;
       alert(`曲を始められませんでした: ${e instanceof Error ? e.message : String(e)}`);
       this.showView('setup');
     }
+  }
+
+  private songTitle = '';
+
+  private songSettings(): SongSettings {
+    const s = this.settings;
+    return {
+      songMode: s.songMode,
+      hands: s.hands,
+      bpm: s.songBpm,
+      toleranceMs: s.toleranceMs,
+      metronome: s.metronome,
+      judge: { octaveEquivalent: s.octaveEquivalent },
+    };
+  }
+
+  private showSongHead(rangeLabel: string): void {
+    const s = this.settings;
+    const wait = s.songMode === 'wait';
+    $('#song-skip').hidden = !wait;
+    $('#song-back').hidden = !wait;
+    const tags = [rangeLabel ? `抜粋 ${rangeLabel}` : '', SONG_MODE_LABELS[s.songMode], HAND_LABELS[s.hands]].filter(Boolean).join('・');
+    $('#song-title').innerHTML = `${escapeHtml(this.songTitle)}<span class="tag">${tags}</span>`;
+  }
+
+  /** 抜粋を弾き始める。retry なら同じ範囲をもう一度、そうでなければ新しくランダムに選ぶ */
+  private playExcerpt(retry: boolean): void {
+    const ex = this.excerpt;
+    if (!ex || ex.ending) return;
+    const s = this.settings;
+    const range = retry && ex.range ? ex.range : pickExcerpt(this.song.allSteps(s.hands), s.excerptMin, s.excerptMax, ex.range);
+    if (!range) {
+      this.running = false;
+      this.excerpt = null;
+      alert('判定する音がありません（片手モードの手の選び方を確かめてください）');
+      this.showView('setup');
+      return;
+    }
+    ex.range = range;
+    ex.between = false;
+    $('#excerpt-actions').hidden = true;
+    this.showSongHead(this.song.rangeLabel(range, s.hands));
+    this.song.start(this.songSettings(), range);
+  }
+
+  /** 1つの抜粋を弾き終えた。結果を出して「もう一度 / 次の抜粋」を待つ */
+  private showExcerptVerdict(result: SongResult): void {
+    const ex = this.excerpt!;
+    ex.between = true;
+    const s = summarizeSong(result);
+    const clean = s.played > 0 && s.correct === s.played;
+    const feedback = $('#song-feedback');
+    if (clean) {
+      feedback.innerHTML = `✓ ${result.rangeLabel} を弾けました<span class="sub">Enter で次の抜粋</span>`;
+      feedback.className = 'ok';
+    } else {
+      const measures = [...new Set(result.outcomes.filter((o) => !o.correct).map((o) => o.step.measureNumber))];
+      feedback.innerHTML = `${result.rangeLabel}: ${s.correct} / ${s.played} か所<span class="sub">間違えた小節 ${measures.join('・')}　Enter でもう一度</span>`;
+      feedback.className = 'ng';
+    }
+    $('#excerpt-retry').classList.toggle('primary', !clean);
+    $('#excerpt-next').classList.toggle('primary', clean);
+    $('#excerpt-actions').hidden = false;
+    const done = ex.results.length;
+    const cleanCount = ex.results.filter(isCleanExcerpt).length;
+    $('#song-progress').textContent = `抜粋 ${done} 回　ミスなし ${cleanCount} 回`;
   }
 
   private async songSource(): Promise<{ name: string; data: string }> {
@@ -697,6 +796,13 @@ export class App {
   }
 
   private finishSong(result: SongResult): void {
+    if (this.excerpt) {
+      // 途中でやめた抜粋は、1か所でも弾いていれば結果に入れる
+      if (result.outcomes.length) this.excerpt.results.push(result);
+      if (this.excerpt.ending) this.finishExcerpts();
+      else this.showExcerptVerdict(result);
+      return;
+    }
     this.running = false;
     const s = summarizeSong(result);
     $('#result-title').textContent = `結果: ${result.title}`;
@@ -730,6 +836,52 @@ export class App {
         return `<tr class="ng"><td>${o.step.measureNumber}</td><td>${spell(o, o.step.notes.map((n) => n.midi))}</td><td class="missing-cell">${spell(o, o.missing) || '—'}</td><td class="played">${spell(o, o.extras) || '—'}</td><td class="small">${timing}</td></tr>`;
       });
     $('#answers').innerHTML = rows.join('') || '<tr><td colspan="5">間違えた箇所はありません</td></tr>';
+    this.showView('result');
+  }
+
+  /** 抜粋の練習を終えた。弾いた抜粋ごとの結果を出す */
+  private finishExcerpts(): void {
+    const results = this.excerpt?.results ?? [];
+    this.excerpt = null;
+    this.running = false;
+    $('#excerpt-actions').hidden = true;
+    const outcomes = results.flatMap((r) => r.outcomes);
+    const correct = outcomes.filter((o) => o.correct).length;
+    const clean = results.filter(isCleanExcerpt).length;
+    $('#result-title').textContent = `結果: ${this.songTitle}（抜粋）`;
+    const tiles = [
+      `<div class="stat"><span class="label">ミスなしで弾けた抜粋</span><span class="value">${clean}<small> / ${results.length}</small></span><span class="sub">弾き直しも1回に数える</span></div>`,
+      `<div class="stat"><span class="label">正答率</span><span class="value">${outcomes.length ? Math.round((correct / outcomes.length) * 100) : 0}<small>%</small></span><span class="sub">${correct} / ${outcomes.length} か所</span></div>`,
+    ];
+    if (this.settings.songMode === 'wait') {
+      const reactions = outcomes.map((o) => o.reactionMs).filter((r): r is number => r !== null);
+      const avg = reactions.length ? reactions.reduce((a, b) => a + b, 0) / reactions.length : null;
+      tiles.push(
+        `<div class="stat"><span class="label">平均反応時間</span><span class="value">${avg === null ? '—' : formatMs(avg)}</span><span class="sub">カーソル到達から最初の押鍵まで</span></div>`,
+      );
+    } else if (results.length) {
+      const t = summarizeSong({ ...results[0], outcomes }).timing;
+      tiles.push(
+        `<div class="stat"><span class="label">タイミングOK（±${this.settings.toleranceMs} ms）</span><span class="value">${Math.round(t.onTimeRate * 100)}<small>%</small></span><span class="sub">${tendencyText(t.meanMs)}（♩=${Math.round(results[0].bpm)}）</span></div>`,
+      );
+    }
+    $('#summary').innerHTML = tiles.join('');
+    $('#answers-head').innerHTML = '<tr><th>#</th><th>範囲</th><th>結果</th><th>間違えたところ</th></tr>';
+    const rows = results.map((r, i) => {
+      const ok = r.outcomes.filter((o) => o.correct).length;
+      const spell = (o: SongResult['outcomes'][number], midis: number[]) =>
+        midis.map((m) => pitchName(spellMidiInKey(m, r.keyFifthsAt(o.step.entryIndex)))).join('・');
+      const mistakes = r.outcomes
+        .filter((o) => !o.correct)
+        .map((o) => {
+          const parts = [o.missing.length ? `足りない ${spell(o, o.missing)}` : '', o.extras.length ? `余計 ${spell(o, o.extras)}` : ''];
+          return `${o.step.measureNumber}小節: ${parts.filter(Boolean).join('／') || 'ずれ'}`;
+        });
+      const partial = r.outcomes.length < r.totalSteps ? `（途中まで ${r.outcomes.length} / ${r.totalSteps} か所）` : '';
+      const verdict = isCleanExcerpt(r) ? '○' : `${ok} / ${r.outcomes.length}`;
+      return `<tr class="${isCleanExcerpt(r) ? 'ok' : 'ng'}"><td>${i + 1}</td><td>${r.rangeLabel}</td><td>${verdict}${partial}</td><td class="small">${escapeHtml(mistakes.join('、')) || '—'}</td></tr>`;
+    });
+    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="4">弾いた抜粋はありません</td></tr>';
     this.showView('result');
   }
 
@@ -876,6 +1028,9 @@ export class App {
     $<HTMLInputElement>('#chord-window').value = String(s.chordWindowMs);
     radio('songMode').value = s.songMode;
     radio('hands').value = s.hands;
+    radio('songRange').value = s.songRange;
+    $<HTMLInputElement>('#excerpt-min').value = String(s.excerptMin);
+    $<HTMLInputElement>('#excerpt-max').value = String(s.excerptMax);
     $<HTMLInputElement>('#song-bpm').value = s.songBpm === null ? '' : String(s.songBpm);
     $<HTMLInputElement>('#tolerance').value = String(s.toleranceMs);
     $<HTMLInputElement>('#metronome').checked = s.metronome;
@@ -907,10 +1062,15 @@ export class App {
       const modeValue = radio('mode').value;
       const mode: Mode = modeValue === 'shape' || modeValue === 'song' || modeValue === 'flow' ? modeValue : 'reflex';
       const bpmRaw = $<HTMLInputElement>('#song-bpm').value.trim();
+      const excerptA = clampInt($<HTMLInputElement>('#excerpt-min').value, 1, EXCERPT_MAX_MEASURES, DEFAULT_SETTINGS.excerptMin);
+      const excerptB = clampInt($<HTMLInputElement>('#excerpt-max').value, 1, EXCERPT_MAX_MEASURES, DEFAULT_SETTINGS.excerptMax);
       this.settings = {
         mode,
         songMode: radio('songMode').value === 'tempo' ? 'tempo' : 'wait',
         hands: (['right', 'left'] as const).find((h) => h === radio('hands').value) ?? 'both',
+        songRange: radio('songRange').value === 'excerpt' ? 'excerpt' : 'whole',
+        excerptMin: Math.min(excerptA, excerptB),
+        excerptMax: Math.max(excerptA, excerptB),
         songBpm: bpmRaw ? clampInt(bpmRaw, 20, 240, 80) : null,
         toleranceMs: clampInt($<HTMLInputElement>('#tolerance').value, 20, 300, DEFAULT_SETTINGS.toleranceMs),
         metronome: $<HTMLInputElement>('#metronome').checked,
@@ -948,7 +1108,7 @@ export class App {
       dim('#key-max-label', keyKind !== 'random');
       $('#mode-label').textContent =
         mode === 'song'
-          ? `${MODE_LABELS[mode]}・${SONG_MODE_LABELS[this.settings.songMode]}`
+          ? `${MODE_LABELS[mode]}・${this.settings.songRange === 'excerpt' ? '抜粋・' : ''}${SONG_MODE_LABELS[this.settings.songMode]}`
           : mode === 'flow'
             ? `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}・♩=${this.settings.flowBpm}`
             : `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
@@ -962,6 +1122,7 @@ export class App {
       form.querySelectorAll<HTMLElement>('.shape-only').forEach((el) => (el.hidden = mode !== 'shape'));
       form.querySelectorAll<HTMLElement>('.song-only').forEach((el) => (el.hidden = mode !== 'song'));
       dim('#tempo-options', this.settings.songMode !== 'tempo');
+      dim('#excerpt-options', this.settings.songRange !== 'excerpt');
       $<HTMLButtonElement>('#song-remove').disabled = !this.settings.songSource.startsWith('lib:');
       dim('#focus-weak-label', mode !== 'reflex');
       this.grouper.setWindow(this.settings.chordWindowMs);
@@ -1059,6 +1220,11 @@ function clampInt(raw: string, min: number, max: number, fallback: number): numb
 
 function formatMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)} 秒` : `${Math.round(ms)} ms`;
+}
+
+/** 抜粋をはじめから終わりまで、ミスなしで弾けたか */
+function isCleanExcerpt(r: SongResult): boolean {
+  return r.outcomes.length === r.totalSteps && r.outcomes.every((o) => o.correct);
 }
 
 function isFormControl(t: EventTarget | null): boolean {

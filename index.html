@@ -32,7 +32,7 @@
           <div class="mode-tiles" role="radiogroup" aria-label="練習モード">
             <label class="tile"><input type="radio" name="mode" value="reflex" /><span class="tile-title">反射</span><span class="tile-desc">単音を一瞬で読む</span></label>
             <label class="tile"><input type="radio" name="mode" value="shape" /><span class="tile-title">形で読む</span><span class="tile-desc">音程・和音を形で</span></label>
-            <label class="tile"><input type="radio" name="mode" value="song" /><span class="tile-title">曲</span><span class="tile-desc">楽譜を通して弾く</span></label>
+            <label class="tile"><input type="radio" name="mode" value="song" /><span class="tile-title">曲</span><span class="tile-desc">楽譜を通して・抜き出して弾く</span></label>
             <label class="tile"><input type="radio" name="mode" value="flow" /><span class="tile-title">流れ読み</span><span class="tile-desc">流れる譜面を止まらずに</span></label>
           </div>
 
@@ -44,6 +44,19 @@
               <button id="song-remove" type="button" class="small ghost" title="選んだ曲をライブラリから削除（練習記録は残ります）">削除</button>
             </div>
             <span id="song-library-status" class="hint-inline" aria-live="polite"></span>
+            <div class="field">
+              <span class="field-label">範囲</span>
+              <div class="seg">
+                <label><input type="radio" name="songRange" value="whole" />曲全体</label>
+                <label><input type="radio" name="songRange" value="excerpt" />ランダム抜粋</label>
+              </div>
+              <span id="excerpt-options">
+                <label><input id="excerpt-min" type="number" min="1" max="8" aria-label="抜粋する小節数（最小）" /></label>〜<label
+                  ><input id="excerpt-max" type="number" min="1" max="8" aria-label="抜粋する小節数（最大）" /> 小節</label
+                >
+              </span>
+              <span class="hint-inline">抜粋は、曲からランダムに選んだ数小節だけを弾き、ちゃんと弾けたかを確かめる</span>
+            </div>
             <div class="field">
               <span class="field-label">進め方</span>
               <div class="seg">
@@ -207,6 +220,10 @@
         <div class="song-foot">
           <div id="song-staff" class="mini-staff" aria-label="現在の位置（押した音の読み返し）"></div>
           <div id="song-feedback" aria-live="polite"></div>
+          <div id="excerpt-actions" class="excerpt-actions" hidden>
+            <button id="excerpt-retry">もう一度 <kbd>R</kbd></button>
+            <button id="excerpt-next">次の抜粋 <kbd>N</kbd></button>
+          </div>
         </div>
       </section>
 

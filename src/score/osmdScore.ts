@@ -44,6 +44,7 @@ export class OsmdScore {
   /** xml は MusicXML の文字列。.mxl は中身をバイナリ文字列（1文字=1バイト）で渡す */
   async load(xml: string): Promise<LoadedScore> {
     await this.osmd.load(xml);
+    this.setDrawRange(null);
     this.osmd.render();
     this.colored.clear();
     this.noteTime.clear();
@@ -101,6 +102,31 @@ export class OsmdScore {
       timeSignature: { numerator: ts?.Numerator ?? 4, denominator: ts?.Denominator ?? 4 },
       keyFifthsAt: (i) => keys[i] ?? 0,
     };
+  }
+
+  /**
+   * 指定した小節（measureIndex、両端を含む）だけを描き直す。null で曲全体に戻す。
+   * 描き直すと色はすべて消える
+   */
+  showMeasures(range: { from: number; to: number } | null): void {
+    this.setDrawRange(range);
+    this.osmd.render();
+    // 描き直しで符頭の SVG が作り直されるので、色を付けた音の記録も捨てる
+    this.colored.clear();
+    this.pendingTies = [];
+    this.osmd.cursor.show();
+  }
+
+  private setDrawRange(range: { from: number; to: number } | null): void {
+    const rules = this.osmd.EngravingRules;
+    rules.MinMeasureToDrawIndex = range?.from ?? 0;
+    rules.MaxMeasureToDrawIndex = range?.to ?? Number.MAX_VALUE;
+    // OSMD は弱起の曲で「小節番号」から描く範囲を決め直すので、それを止めて上の番号（通し番号）をそのまま使わせる
+    rules.MinMeasureToDrawNumber = 0;
+    rules.MaxMeasureToDrawNumber = 0;
+    // 抜粋では曲名・作曲者を描かない（楽譜を大きく見せる。曲名は画面の上に出ている）
+    const full = range === null;
+    this.osmd.setOptions({ drawTitle: full, drawSubtitle: full, drawComposer: full, drawLyricist: full });
   }
 
   /** カーソルを entryIndex 番目の位置へ動かす（楽譜は自動でスクロールする） */

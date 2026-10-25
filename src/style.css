@@ -405,6 +405,8 @@ body[data-view='song'] main, body[data-view='flow'] main { padding-top: 14px; pa
 #song-feedback .missing { color: var(--missing); }
 #song-feedback .sub { margin-left: 12px; font-size: 14px; font-weight: 400; color: var(--muted); }
 #song-progress { font-variant-numeric: tabular-nums; color: var(--muted); }
+.excerpt-actions { display: flex; gap: 10px; margin-left: auto; flex: 0 0 auto; }
+#excerpt-options input { width: 4em; }
 #answers td.small { font-size: 12px; color: var(--muted); }
 
 /* 流れ読み */
