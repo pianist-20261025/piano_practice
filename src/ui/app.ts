@@ -27,7 +27,7 @@ import { pickExcerpt, type ExcerptRange } from '../score/excerpt';
 import type { HandSetting } from '../score/steps';
 import type { Rhythm } from '../generator/phrase';
 import { FlowPractice, summarizeFlow, type FlowResult } from './flowMode';
-import { SongPractice, summarizeSong, type SongMode, type SongResult, type SongSettings } from './songMode';
+import { JUMP_MEASURES, SongPractice, summarizeSong, type SongMode, type SongResult, type SongSettings } from './songMode';
 import { fullscreenSupported, isFullscreen, isIPad, isStandalone, onFullscreenChange, toggleFullscreen } from './platform';
 import { renderStats } from './statsView';
 
@@ -222,6 +222,8 @@ export class App {
     $('#song-stop').addEventListener('click', () => this.finishSession());
     $('#song-skip').addEventListener('click', () => this.song.skip());
     $('#song-back').addEventListener('click', () => this.song.back());
+    $('#song-back5').addEventListener('click', () => this.song.jumpMeasures(-JUMP_MEASURES));
+    $('#song-fwd5').addEventListener('click', () => this.song.jumpMeasures(JUMP_MEASURES));
     $('#excerpt-retry').addEventListener('click', () => this.playExcerpt(true));
     $('#excerpt-next').addEventListener('click', () => this.playExcerpt(false));
     // タブを閉じる・切り替えるときに、曲モードのまだ保存していない記録を保存する
@@ -255,8 +257,14 @@ export class App {
         if (e.code === 'Enter') this.playExcerpt($('#excerpt-retry').classList.contains('primary'));
       }
       if (e.code === 'Escape' && this.running) this.finishSession();
-      if (e.code === 'ArrowRight' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.skip();
-      if (e.code === 'ArrowLeft' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.back();
+      // 「戻る」などのボタンを押した後もボタンにフォーカスが残るので、矢印キーは入力欄のときだけ無視する
+      if ((e.code === 'ArrowRight' || e.code === 'ArrowLeft') && this.running && this.settings.mode === 'song' && !isTextControl(e.target)) {
+        // Shift を押しながらなら5小節ずつ
+        const forward = e.code === 'ArrowRight';
+        if (e.shiftKey) this.song.jumpMeasures(forward ? JUMP_MEASURES : -JUMP_MEASURES);
+        else if (forward) this.song.skip();
+        else this.song.back();
+      }
     });
     $('#show-stats').addEventListener('click', () => this.openStats());
     $('#kb-toggle').addEventListener('click', () => this.toggleKeyboard());
@@ -672,8 +680,7 @@ export class App {
   private showSongHead(rangeLabel: string): void {
     const s = this.settings;
     const wait = s.songMode === 'wait';
-    $('#song-skip').hidden = !wait;
-    $('#song-back').hidden = !wait;
+    for (const id of ['#song-skip', '#song-back', '#song-back5', '#song-fwd5']) $(id).hidden = !wait;
     const range = !rangeLabel ? '' : this.excerpt?.fixed ? rangeLabel : `抜粋 ${rangeLabel}`;
     const tags = [range, SONG_MODE_LABELS[s.songMode], HAND_LABELS[s.hands]].filter(Boolean).join('・');
     $('#song-title').innerHTML = `${escapeHtml(this.songTitle)}<span class="tag">${tags}</span>`;
@@ -922,7 +929,7 @@ export class App {
           const parts = [o.missing.length ? `足りない ${spell(o, o.missing)}` : '', o.extras.length ? `余計 ${spell(o, o.extras)}` : ''];
           return `${o.step.measureNumber}小節: ${parts.filter(Boolean).join('／') || 'ずれ'}`;
         });
-      const partial = r.outcomes.length < r.totalSteps ? `（途中まで ${r.outcomes.length} / ${r.totalSteps} か所）` : '';
+      const partial = r.outcomes.length < r.totalSteps ? `（弾いたのは ${r.outcomes.length} / ${r.totalSteps} か所）` : '';
       const verdict = isCleanExcerpt(r) ? '○' : `${ok} / ${r.outcomes.length}`;
       return `<tr class="${isCleanExcerpt(r) ? 'ok' : 'ng'}"><td>${i + 1}</td><td>${r.rangeLabel}</td><td>${verdict}${partial}</td><td class="small">${escapeHtml(mistakes.join('、')) || '—'}</td></tr>`;
     });
@@ -1280,6 +1287,10 @@ function formatMs(ms: number): string {
 /** 抜粋をはじめから終わりまで、ミスなしで弾けたか */
 function isCleanExcerpt(r: SongResult): boolean {
   return r.outcomes.length === r.totalSteps && r.outcomes.every((o) => o.correct);
+}
+
+function isTextControl(t: EventTarget | null): boolean {
+  return t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
 }
 
 function isFormControl(t: EventTarget | null): boolean {

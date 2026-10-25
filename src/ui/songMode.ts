@@ -40,6 +40,8 @@ const SETTLE_MS = 250;
 const RELEASED_GRACE_MS = 500;
 /** 同じ位置で何も起きないまま、足りない音を示すまでの時間 */
 const HINT_MS = 2500;
+/** 「5小節戻る / 飛ばす」で動く小節数 */
+export const JUMP_MEASURES = 5;
 
 /** 1ステップの結果（間違えたステップの一覧と記録に使う） */
 export interface StepOutcome {
@@ -51,6 +53,8 @@ export interface StepOutcome {
   reactionMs: number | null;
   /** テンポ: 押せた音のずれ（ms） */
   deviations: number[];
+  /** 「5小節飛ばす」で弾かずに通り過ぎた位置（記録せず、結果にも数えない） */
+  skipped?: boolean;
 }
 
 export interface SongResult {
@@ -92,7 +96,7 @@ export class SongPractice {
   private steps: Step[] = [];
   private outcomes: StepOutcome[] = [];
   /** outcomes と同じ順の記録。待機モードでは「戻る」で取り消せるよう、終わるまで（または画面を離れるまで）保存しない */
-  private records: AnswerRecord[] = [];
+  private records: (AnswerRecord | null)[] = [];
   /** records のうち保存済みの数 */
   private saved = 0;
   private running = false;
@@ -220,7 +224,8 @@ export class SongPractice {
       settings: this.settings!,
       bpm: this.bpm,
       totalSteps: this.steps.length,
-      outcomes: this.outcomes,
+      // 小節ごと飛ばした位置は、弾いていないので結果に入れない
+      outcomes: this.outcomes.filter((o) => !o.skipped),
       range: this.range,
       rangeLabel: this.range ? this.rangeLabel(this.range, this.settings!.hands) : '',
       keyFifthsAt: this.loaded!.keyFifthsAt,
@@ -235,7 +240,10 @@ export class SongPractice {
 
   /** まだ保存していない記録を保存する（終了時のほか、画面を離れるときにも呼ぶ） */
   flush(): void {
-    for (; this.saved < this.records.length; this.saved++) this.cb.persist(this.records[this.saved]);
+    for (; this.saved < this.records.length; this.saved++) {
+      const record = this.records[this.saved];
+      if (record) this.cb.persist(record);
+    }
   }
 
   /**
@@ -244,9 +252,42 @@ export class SongPractice {
    */
   back(): void {
     if (!this.running || this.settings!.songMode !== 'wait') return;
+    this.rewindTo(Math.max(0, this.current - 1));
+  }
+
+  /**
+   * 待機モードで、小節単位で戻る（delta < 0）・飛ばす（delta > 0）。
+   * - 戻る: いまの小節から |delta| 小節前の小節の頭へ。そこからいまの位置までの色と結果は取り消す（back と同じ）
+   * - 飛ばす: delta 小節後の小節の頭へ。曲（抜粋）の終わりを越えるときは最後の小節の頭へ。
+   *   間の位置は弾いていないものとして、記録せず結果にも数えない（練習する場所へ移るための操作なので）
+   */
+  jumpMeasures(delta: number): void {
+    if (!this.running || this.settings!.songMode !== 'wait' || !delta) return;
+    const here = this.steps[this.current].measureIndex;
+    if (delta < 0) {
+      // いまの位置は前の小節の頭以降にあるので、必ず見つかる
+      this.rewindTo(this.steps.findIndex((s) => s.measureIndex >= here + delta));
+      return;
+    }
+    let target = this.steps.findIndex((s) => s.measureIndex >= here + delta);
+    if (target < 0) {
+      const last = this.steps[this.steps.length - 1].measureIndex;
+      target = this.steps.findIndex((s) => s.measureIndex === last);
+    }
+    if (target <= this.current) return;
     window.clearTimeout(this.settleTimer);
     window.clearTimeout(this.hintTimer);
-    const target = Math.max(0, this.current - 1);
+    for (const n of this.steps[this.current].notes) this.paint(n, null);
+    for (let i = this.current; i < target; i++) {
+      this.record({ step: this.steps[i], correct: false, missing: [], extras: [], reactionMs: null, deviations: [], skipped: true });
+    }
+    this.showWaitStep(target, []);
+  }
+
+  /** target 番目の位置まで戻る。戻った位置からいまの位置までの色と結果は取り消す */
+  private rewindTo(target: number): void {
+    window.clearTimeout(this.settleTimer);
+    window.clearTimeout(this.hintTimer);
     for (let i = target; i <= this.current; i++) for (const n of this.steps[i].notes) this.paint(n, null);
     this.outcomes.length = target;
     this.records.length = target;
@@ -635,6 +676,11 @@ export class SongPractice {
 
   private record(o: StepOutcome): void {
     this.outcomes.push(o);
+    if (o.skipped) {
+      // outcomes と同じ順に並べるため、記録の場所だけ空けておく
+      this.records.push(null);
+      return;
+    }
     const s = this.settings!;
     const expected = o.step.notes.map((n) => n.midi);
     const timing = o.deviations.length ? o.deviations.reduce((a, b) => a + b, 0) / o.deviations.length : undefined;
@@ -691,8 +737,9 @@ export class SongPractice {
   private progressText(i: number): string {
     const step = this.steps[i];
     const last = this.steps[this.steps.length - 1].measureNumber;
-    const done = this.outcomes.length;
-    const ok = this.outcomes.filter((o) => o.correct).length;
+    const played = this.outcomes.filter((o) => !o.skipped);
+    const done = played.length;
+    const ok = played.filter((o) => o.correct).length;
     return `小節 ${step.measureNumber} / ${last}　正解 ${ok} / ${done}`;
   }
 }
