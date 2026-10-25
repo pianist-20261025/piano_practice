@@ -320,6 +320,12 @@ button.danger { color: var(--wrong); }
   font-size: inherit;
 }
 .file-button:hover { border-color: var(--accent); }
+/*
+ * ファイル選択の入力欄は見えなくするが、display: none にはしない
+ * （iPad の Safari やアプリ内ブラウザでは、display: none だとラベルを押してもファイルを選ぶ画面が開かないことがある）
+ */
+.file-button { position: relative; overflow: hidden; }
+.file-input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
 
 /* 統計 */
 #stats-body { position: relative; }

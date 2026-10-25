@@ -646,6 +646,8 @@ export class App {
     const files = [...(input.files ?? [])];
     input.value = '';
     if (!files.length) return;
+    const status = $('#song-library-status');
+    status.textContent = '読み込んでいます…';
     let lastId: number | null = null;
     const failed: string[] = [];
     for (const file of files) {
@@ -654,14 +656,22 @@ export class App {
         lastId = await this.songLibrary.add(songTitle(file.name, data), data);
       } catch (e) {
         console.error(e);
-        failed.push(file.name);
+        // 何が悪かったのかを、ファイル名と一緒に出す
+        failed.push(`${file.name}（${e instanceof Error ? e.message : String(e)}）`);
       }
     }
-    this.librarySongs = await this.songLibrary.list();
+    try {
+      this.librarySongs = await this.songLibrary.list();
+    } catch (e) {
+      console.error(e);
+    }
     this.fillSongSources(lastId === null ? this.settings.songSource : `lib:${lastId}`);
     const added = files.length - failed.length;
-    $('#song-library-status').textContent =
-      `${added} 曲をライブラリに追加しました` + (failed.length ? `（追加できなかったファイル: ${failed.join('、')}）` : '');
+    const local = added && (await this.songLibrary.storage()) === 'local';
+    status.textContent =
+      (added ? `${added} 曲をライブラリに追加しました` : '曲を追加できませんでした') +
+      (local ? '（このブラウザは容量が小さいので、たくさんは入りません）' : '') +
+      (failed.length ? `　追加できなかったファイル: ${failed.join('、')}` : '');
   }
 
   private async removeSelectedSong(): Promise<void> {

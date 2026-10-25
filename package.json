@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "app": "tsc --noEmit && vite build && vite preview",
-    "build": "tsc --noEmit && vite build",
+    "app": "npm run build && vite preview",
+    "build": "node tools/build-song-index.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

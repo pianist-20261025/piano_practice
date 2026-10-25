@@ -40,7 +40,7 @@
             <legend>曲</legend>
             <div class="field wide">
               <select id="song-source" aria-label="曲"></select>
-              <label class="file-button small" title=".musicxml / .mxl（複数可）">＋ 追加<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" multiple hidden /></label>
+              <label class="file-button small" title=".musicxml / .mxl（複数可）">＋ 追加<input id="song-file" class="file-input" type="file" accept=".musicxml,.xml,.mxl" multiple /></label>
               <button id="song-remove" type="button" class="small ghost" title="選んだ曲をライブラリから削除（練習記録は残ります）">削除</button>
             </div>
             <span id="song-library-status" class="hint-inline" aria-live="polite"></span>
@@ -248,7 +248,7 @@
         <div class="data-actions">
           <span class="hint-inline">記録はこのPCのこのブラウザの中だけに保存されます。</span>
           <button id="export-records">記録を書き出す（JSON）</button>
-          <label class="file-button">記録を読み込む<input id="import-records" type="file" accept="application/json,.json" hidden /></label>
+          <label class="file-button">記録を読み込む<input id="import-records" class="file-input" type="file" accept="application/json,.json" /></label>
           <button id="clear-records" class="danger">記録をすべて消す</button>
         </div>
       </section>
