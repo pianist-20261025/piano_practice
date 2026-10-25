@@ -20,27 +20,59 @@
     <main>
       <section id="setup" class="panel" hidden>
         <form id="settings">
-          <fieldset>
-            <legend>練習モード</legend>
-            <label class="radio"><input type="radio" name="mode" value="reflex" /> 反射モード（単音）</label>
-            <label class="radio"><input type="radio" name="mode" value="shape" /> 形で読むモード（音程・和音）</label>
-            <label class="radio"><input type="radio" name="mode" value="song" /> 曲モード（MusicXML）</label>
-            <label class="radio"><input type="radio" name="mode" value="flow" /> 流れ読みモード（スクロール）</label>
+          <div class="mode-tiles" role="radiogroup" aria-label="練習モード">
+            <label class="tile"><input type="radio" name="mode" value="reflex" /><span class="tile-title">反射</span><span class="tile-desc">単音を一瞬で読む</span></label>
+            <label class="tile"><input type="radio" name="mode" value="shape" /><span class="tile-title">形で読む</span><span class="tile-desc">音程・和音を形で</span></label>
+            <label class="tile"><input type="radio" name="mode" value="song" /><span class="tile-title">曲</span><span class="tile-desc">楽譜を通して弾く</span></label>
+            <label class="tile"><input type="radio" name="mode" value="flow" /><span class="tile-title">流れ読み</span><span class="tile-desc">流れる譜面を止まらずに</span></label>
+          </div>
+
+          <fieldset id="song-settings" class="card" hidden>
+            <legend>曲</legend>
+            <div class="field wide">
+              <select id="song-source" aria-label="曲"></select>
+              <label class="file-button small" title=".musicxml / .mxl（複数可）">＋ 追加<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" multiple hidden /></label>
+              <button id="song-remove" type="button" class="small ghost" title="選んだ曲をライブラリから削除（練習記録は残ります）">削除</button>
+            </div>
+            <span id="song-library-status" class="hint-inline" aria-live="polite"></span>
+            <div class="field">
+              <span class="field-label">進め方</span>
+              <div class="seg">
+                <label><input type="radio" name="songMode" value="wait" />待機</label>
+                <label><input type="radio" name="songMode" value="tempo" />テンポ</label>
+              </div>
+              <span class="hint-inline">待機は弾けるまで止まる／テンポは止まらずに進む</span>
+            </div>
+            <div class="field">
+              <span class="field-label">判定する手</span>
+              <div class="seg">
+                <label><input type="radio" name="hands" value="both" />両手</label>
+                <label><input type="radio" name="hands" value="right" />右手</label>
+                <label><input type="radio" name="hands" value="left" />左手</label>
+              </div>
+            </div>
+            <div id="tempo-options" class="field">
+              <span class="field-label">テンポ</span>
+              <label>♩= <input id="song-bpm" type="number" min="20" max="240" placeholder="楽譜" /></label>
+            </div>
           </fieldset>
-          <fieldset id="flow-settings" hidden>
+
+          <fieldset id="flow-settings" class="card" hidden>
             <legend>流れ読み</legend>
-            <div class="row">
-              <label>小節数 <input id="flow-measures" type="number" min="2" max="64" /> 小節</label>
+            <div class="field">
+              <label>小節数 <input id="flow-measures" type="number" min="2" max="64" /></label>
               <label>テンポ ♩= <input id="flow-bpm" type="number" min="20" max="200" /></label>
+            </div>
+            <div class="field">
               <label>リズム
                 <select id="flow-rhythm">
                   <option value="quarter">4分音符のみ</option>
-                  <option value="mixed">2分・4分・8分を混ぜる</option>
+                  <option value="mixed">2分・4分・8分</option>
                 </select>
               </label>
-              <label>跳躍の上限
+              <label>跳躍
                 <select id="flow-leap">
-                  <option value="1">2度（順次進行のみ）</option>
+                  <option value="1">2度（順次進行）</option>
                   <option value="2">3度まで</option>
                   <option value="3">4度まで</option>
                   <option value="4">5度まで</option>
@@ -50,79 +82,47 @@
                 </select>
               </label>
             </div>
-            <p class="hint-inline">譜面が右から左へ流れます。縦線に音符が来たら弾いてください。間違えても止まりません。譜表・音域・調号の設定は下の欄のものを使います（大譜表なら小節ごとに上下どちらかの段）。</p>
           </fieldset>
-          <fieldset id="song-settings" hidden>
-            <legend>曲</legend>
-            <div class="row">
-              <label>曲 <select id="song-source"></select></label>
-            </div>
-            <div class="row">
-              <label class="file-button">曲を追加（.musicxml / .mxl、複数可）<input id="song-file" type="file" accept=".musicxml,.xml,.mxl" multiple hidden /></label>
-              <button id="song-remove" type="button">選んだ曲をライブラリから削除</button>
-              <span id="song-library-status" class="hint-inline" aria-live="polite"></span>
-            </div>
-            <div class="row">
-              <span class="row-label">進め方</span>
-              <label class="radio"><input type="radio" name="songMode" value="wait" /> 待機（押せるまで止まる）</label>
-              <label class="radio"><input type="radio" name="songMode" value="tempo" /> テンポ（止まらずに進む）</label>
-            </div>
-            <div class="row">
-              <span class="row-label">判定する手</span>
-              <label class="radio"><input type="radio" name="hands" value="both" /> 両手</label>
-              <label class="radio"><input type="radio" name="hands" value="right" /> 右手のみ</label>
-              <label class="radio"><input type="radio" name="hands" value="left" /> 左手のみ</label>
-            </div>
-            <div id="tempo-options" class="row">
-              <label>テンポ ♩= <input id="song-bpm" type="number" min="20" max="240" placeholder="楽譜どおり" /></label>
-            </div>
-            <p class="hint-inline">装飾音・繰り返し記号（書かれた順に1回だけ進む）・ペダル・アルペジオのずれは判定しません。タイの後ろ側と、前から伸ばしている音は押し直し不要です。</p>
-          </fieldset>
-          <fieldset id="timing-settings" hidden>
-            <legend>タイミングの判定</legend>
-            <div class="row">
-              <label>許容するずれ ± <input id="tolerance" type="number" min="20" max="300" step="10" /> ms</label>
-              <label class="check"><input id="metronome" type="checkbox" /> メトロノームを鳴らす（カウントは常に鳴る）</label>
-            </div>
-          </fieldset>
-          <fieldset id="shape-settings" hidden>
+
+          <fieldset id="shape-settings" class="card" hidden>
             <legend>出題する形</legend>
-            <div id="shape-list" class="row"></div>
-            <label>和音とみなす時間差 <input id="chord-window" type="number" min="30" max="150" step="10" /> ms
-              <span class="hint-inline">（最初の音からこの時間内に押した音を1つの和音として判定）</span></label>
+            <div id="shape-list" class="chips"></div>
           </fieldset>
-          <fieldset class="generated-only">
-            <legend>譜表</legend>
-            <label class="radio"><input type="radio" name="layout" value="treble" /> ト音記号</label>
-            <label class="radio"><input type="radio" name="layout" value="bass" /> ヘ音記号</label>
-            <label class="radio"><input type="radio" name="layout" value="grand" /> 大譜表（上下ランダム）</label>
-          </fieldset>
-          <fieldset class="generated-only">
-            <legend>音域</legend>
-            <div id="range-treble" class="range-row">
-              <span class="range-name">ト音記号</span>
+
+          <fieldset class="card generated-only">
+            <legend>譜表・音域</legend>
+            <div class="field">
+              <div class="seg">
+                <label><input type="radio" name="layout" value="treble" />ト音記号</label>
+                <label><input type="radio" name="layout" value="bass" />ヘ音記号</label>
+                <label><input type="radio" name="layout" value="grand" />大譜表</label>
+              </div>
+            </div>
+            <div id="range-treble" class="field range-row">
+              <span class="field-label">ト音記号</span>
               <select id="range-treble-low" aria-label="ト音記号の最低音"></select>
               <span>〜</span>
               <select id="range-treble-high" aria-label="ト音記号の最高音"></select>
             </div>
-            <div id="range-bass" class="range-row">
-              <span class="range-name">ヘ音記号</span>
+            <div id="range-bass" class="field range-row">
+              <span class="field-label">ヘ音記号</span>
               <select id="range-bass-low" aria-label="ヘ音記号の最低音"></select>
               <span>〜</span>
               <select id="range-bass-high" aria-label="ヘ音記号の最高音"></select>
             </div>
           </fieldset>
-          <fieldset class="generated-only">
+
+          <fieldset class="card generated-only">
             <legend>調号・臨時記号</legend>
-            <div class="row">
-              <label class="radio"><input type="radio" name="keyKind" value="none" /> 調号なし</label>
-              <label class="radio"><input type="radio" name="keyKind" value="fixed" /> 指定</label>
-              <label class="radio"><input type="radio" name="keyKind" value="random" /> 問題ごとにランダム</label>
-            </div>
-            <div class="row">
-              <label id="key-fifths-label">指定する調 <select id="key-fifths"></select></label>
-              <label id="key-max-label">ランダムの範囲
-                <select id="key-max">
+            <div class="field">
+              <div class="seg">
+                <label><input type="radio" name="keyKind" value="none" />調号なし</label>
+                <label><input type="radio" name="keyKind" value="fixed" />指定</label>
+                <label><input type="radio" name="keyKind" value="random" />ランダム</label>
+              </div>
+              <label id="key-fifths-label"><select id="key-fifths" aria-label="指定する調"></select></label>
+              <label id="key-max-label">
+                <select id="key-max" aria-label="ランダムの範囲">
                   <option value="1">♯・♭ 1つまで</option>
                   <option value="2">♯・♭ 2つまで</option>
                   <option value="3">♯・♭ 3つまで</option>
@@ -135,23 +135,36 @@
             </div>
             <label class="check"><input id="accidentals" type="checkbox" /> 臨時記号（♯・♭・♮）を混ぜる</label>
           </fieldset>
-          <fieldset>
-            <legend>出題の長さ・判定</legend>
-            <div class="row drill-only">
-              <label class="radio"><input type="radio" name="limitKind" value="count" /> 問題数で区切る</label>
-              <label class="radio"><input type="radio" name="limitKind" value="time" /> 時間で区切る</label>
+
+          <fieldset class="card drill-only">
+            <legend>長さ</legend>
+            <div class="field">
+              <div class="seg">
+                <label><input type="radio" name="limitKind" value="count" />問題数</label>
+                <label><input type="radio" name="limitKind" value="time" />時間</label>
+              </div>
+              <label id="count-label"><input id="count" type="number" min="1" max="500" /> 問</label>
+              <label id="seconds-label"><input id="seconds" type="number" min="10" max="3600" step="10" /> 秒</label>
             </div>
-            <div class="row drill-only">
-              <label id="count-label">問題数 <input id="count" type="number" min="1" max="500" /> 問</label>
-              <label id="seconds-label">制限時間 <input id="seconds" type="number" min="10" max="3600" step="10" /> 秒</label>
-            </div>
-            <label class="check"><input id="octave-eq" type="checkbox" /> オクターブ違いを正解とみなす</label>
-            <label id="focus-weak-label" class="check drill-only"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（これまでの記録から、間違えやすい音・反応が遅い音ほど出やすくする）</label>
           </fieldset>
+
+          <details class="advanced">
+            <summary>詳細設定</summary>
+            <div class="advanced-body">
+              <div id="timing-settings" class="field" hidden>
+                <label>許容するずれ ± <input id="tolerance" type="number" min="20" max="300" step="10" /> ms</label>
+                <label class="check"><input id="metronome" type="checkbox" /> メトロノーム</label>
+              </div>
+              <label class="shape-only">和音とみなす時間差 <input id="chord-window" type="number" min="30" max="150" step="10" /> ms</label>
+              <label class="check"><input id="octave-eq" type="checkbox" /> オクターブ違いを正解とみなす</label>
+              <label id="focus-weak-label" class="check drill-only"><input id="focus-weak" type="checkbox" /> 苦手な音を多めに出す（間違えやすい音・反応が遅い音ほど出やすく）</label>
+              <p class="hint-inline song-only">曲モードでは、装飾音・ペダル・アルペジオのずれは判定しません。繰り返し記号は書かれた順に1回だけ進みます。タイの後ろ側と、押さえたまま続く音は押し直し不要です。</p>
+            </div>
+          </details>
         </form>
         <div class="actions">
           <button id="start" class="primary">はじめる <kbd>Enter</kbd></button>
-          <button id="show-stats">統計を見る</button>
+          <button id="show-stats" class="ghost">統計</button>
           <span id="history-count" class="hint-inline"></span>
         </div>
       </section>
@@ -171,11 +184,13 @@
 
       <section id="song" class="panel wide" hidden>
         <div class="practice-head">
-          <div id="song-progress"></div>
-          <div id="song-title" class="key-name"></div>
+          <div class="head-text">
+            <div id="song-title" class="head-title"></div>
+            <div id="song-progress" class="head-sub"></div>
+          </div>
           <div class="head-buttons">
-            <button id="song-skip" title="待機モードで、いまの位置を飛ばす（弾けなかった位置として記録）">飛ばす <kbd>→</kbd></button>
-            <button id="song-stop">終了 <kbd>Esc</kbd></button>
+            <button id="song-skip" class="ghost" title="待機モードで、いまの位置を飛ばす（弾けなかった位置として記録）">飛ばす <kbd>→</kbd></button>
+            <button id="song-stop" class="ghost">終了 <kbd>Esc</kbd></button>
           </div>
         </div>
         <div id="score" class="score"></div>
@@ -231,7 +246,10 @@
 
     <footer>
       <div id="keyboard"></div>
-      <div id="octave" class="hint"></div>
+      <div class="footer-row">
+        <div id="octave" class="hint"></div>
+        <button id="kb-toggle" type="button" class="small ghost" aria-controls="keyboard">鍵盤を隠す</button>
+      </div>
     </footer>
     <script type="module" src="/src/main.ts"></script>
   </body>

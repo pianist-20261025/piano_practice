@@ -195,7 +195,7 @@ export class SongPractice {
       correct: false,
       missing: missing.map((n) => n.midi),
       extras: judge.extras,
-      reactionMs: this.firstPressAt === null ? null : this.firstPressAt - this.shownAt,
+      reactionMs: this.firstPressAt === null ? null : Math.max(0, this.firstPressAt - this.shownAt),
       deviations: [],
     });
     if (this.current + 1 < this.steps.length) this.showWaitStep(this.current + 1, []);
@@ -324,8 +324,19 @@ export class SongPractice {
   }
 
   private pressWait(ev: NoteEvent): void {
-    const judge = this.waitJudge!;
-    const step = this.steps[this.current];
+    let judge = this.waitJudge!;
+    let step = this.steps[this.current];
+    // 押さえたままの音を確かめるために少し待っている間に、次の音を弾いた → いまの位置は済ませ、この押鍵は次の位置の音として扱う
+    // （待っている位置の音と同じ鍵盤を弾き直したときも。いまの位置の音として「押し直し」に数えて捨ててしまわないように）
+    if (this.awaitingSettle(step) && !judge.missing.includes(ev.note)) {
+      this.creditOptional(step, true);
+      if (judge.done) {
+        this.finishWaitStep(step);
+        if (!this.running) return;
+        judge = this.waitJudge!;
+        step = this.steps[this.current];
+      }
+    }
     this.firstPressAt ??= ev.time;
     const r = judge.press(ev.note);
     if (r === 'hit') {
@@ -348,6 +359,17 @@ export class SongPractice {
     else this.scheduleHint(step);
   }
 
+  /** 足りない音が、押さえたままなので少し待って確かめている音（blocked / held）だけか */
+  private awaitingSettle(step: Step): boolean {
+    const judge = this.waitJudge!;
+    if (judge.done) return false;
+    const missing = step.notes.filter((n) => judge.missing.includes(n.midi));
+    const kinds = missing.map((n) => this.optionalHere.get(n.midi));
+    if (!kinds.length || kinds.some((k) => !k)) return false;
+    if (kinds.includes('held') && !this.pressedHere) return false;
+    return kinds.some((k) => k !== 'sustained');
+  }
+
   /**
    * しばらく先へ進めないときは、足りない音を楽譜とメッセージで示す
    * （何が足りないのか分からないまま止まらないように。→ キーで飛ばすこともできる）
@@ -362,7 +384,7 @@ export class SongPractice {
       const hits = new Set(this.waitJudge!.hits);
       this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'missing'), []);
       this.cb.feedback(
-        `<span class="missing">足りない音: ${this.names(missing.map((n) => n.midi), step)}</span>（弾き直すか、<kbd>→</kbd> で飛ばせます）`,
+        `<span class="missing">足りない音: ${this.names(missing.map((n) => n.midi), step)}</span><span class="sub">弾き直すか、→ キーで飛ばせます</span>`,
         '',
       );
     }, HINT_MS);
@@ -382,7 +404,7 @@ export class SongPractice {
       correct: judge.extras.length === early.length,
       missing: [],
       extras: judge.extras.filter((m) => !early.includes(m)),
-      reactionMs: this.firstPressAt === null ? null : this.firstPressAt - this.shownAt,
+      reactionMs: this.firstPressAt === null ? null : Math.max(0, this.firstPressAt - this.shownAt),
       deviations: [],
     });
     if (this.current + 1 < this.steps.length) this.showWaitStep(this.current + 1, early);

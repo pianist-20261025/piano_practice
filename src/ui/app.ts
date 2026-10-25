@@ -215,6 +215,7 @@ export class App {
       if (e.code === 'ArrowRight' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.skip();
     });
     $('#show-stats').addEventListener('click', () => this.openStats());
+    $('#kb-toggle').addEventListener('click', () => this.toggleKeyboard());
     $('#result-stats').addEventListener('click', () => this.openStats());
     $('#stats-back').addEventListener('click', () => this.showView(this.viewBeforeStats));
     $('#export-records').addEventListener('click', () => this.exportHistory());
@@ -574,7 +575,7 @@ export class App {
     try {
       const title = await this.song.load(source.data, source.name);
       $('#song-skip').hidden = s.songMode !== 'wait';
-      $('#song-title').textContent = `${title}　${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}`;
+      $('#song-title').innerHTML = `${escapeHtml(title)}<span class="tag">${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}</span>`;
       this.running = true;
       this.song.start({
         songMode: s.songMode,
@@ -749,6 +750,32 @@ export class App {
   private showView(view: View): void {
     this.view = view;
     for (const v of VIEWS) $(`#${v}`).hidden = v !== view;
+    document.body.dataset.view = view;
+    this.applyKeyboardVisibility();
+  }
+
+  /** 画面の鍵盤を隠すか。楽譜を大きく見せたい曲・流れ読みと、それ以外とで別々に覚えておく */
+  private keyboardHidden = {
+    score: loadFlag(KB_HIDDEN_KEYS.score, true),
+    other: loadFlag(KB_HIDDEN_KEYS.other, false),
+  };
+
+  private keyboardGroup(): 'score' | 'other' {
+    return this.view === 'song' || this.view === 'flow' ? 'score' : 'other';
+  }
+
+  private applyKeyboardVisibility(): void {
+    const hidden = this.keyboardHidden[this.keyboardGroup()];
+    $('#keyboard').hidden = hidden;
+    $('#kb-toggle').textContent = hidden ? '鍵盤を表示' : '鍵盤を隠す';
+  }
+
+  private toggleKeyboard(): void {
+    const g = this.keyboardGroup();
+    this.keyboardHidden[g] = !this.keyboardHidden[g];
+    saveFlag(KB_HIDDEN_KEYS[g], this.keyboardHidden[g]);
+    this.applyKeyboardVisibility();
+    if (!this.keyboardHidden[g]) this.scrollKeyboardToRange();
   }
 
   private scrollKeyboardToRange(): void {
@@ -892,6 +919,8 @@ export class App {
       // 反射・形で読むモードだけの設定と、曲モード以外（出題を作るモード）の設定
       form.querySelectorAll<HTMLElement>('.drill-only').forEach((el) => (el.hidden = mode === 'song' || mode === 'flow'));
       form.querySelectorAll<HTMLElement>('.generated-only').forEach((el) => (el.hidden = mode === 'song'));
+      form.querySelectorAll<HTMLElement>('.shape-only').forEach((el) => (el.hidden = mode !== 'shape'));
+      form.querySelectorAll<HTMLElement>('.song-only').forEach((el) => (el.hidden = mode !== 'song'));
       dim('#tempo-options', this.settings.songMode !== 'tempo');
       $<HTMLButtonElement>('#song-remove').disabled = !this.settings.songSource.startsWith('lib:');
       dim('#focus-weak-label', mode !== 'reflex');
@@ -904,6 +933,25 @@ export class App {
     });
     form.addEventListener('submit', (e) => e.preventDefault());
     sync();
+  }
+}
+
+const KB_HIDDEN_KEYS = { score: 'sight-reader:kb-hidden-score', other: 'sight-reader:kb-hidden' } as const;
+
+function loadFlag(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === '1';
+  } catch {
+    return fallback;
+  }
+}
+
+function saveFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? '1' : '0');
+  } catch {
+    // 保存できなくても、この画面の間は切り替わる
   }
 }
 
