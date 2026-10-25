@@ -63,6 +63,10 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  /* iPad: ダブルタップでの拡大を止め、タップの灰色の影を出さない */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -77,9 +81,24 @@ header {
   flex-wrap: wrap;
   gap: 8px 24px;
   padding: 12px 24px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+#fullscreen-toggle { padding: 3px 12px; font-size: 13px; }
+.notice {
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--missing);
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.notice b { display: block; margin-bottom: 2px; }
 h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: 0.02em; }
 h1 .mode { margin-left: 10px; font-size: 13px; font-weight: 400; color: var(--muted); }
 h2 { margin: 0 0 16px; font-size: 18px; }
@@ -193,6 +212,7 @@ button.primary:hover { filter: brightness(1.08); }
 button.ghost { background: transparent; }
 button.small, .file-button.small { padding: 5px 12px; font-size: 14px; }
 kbd { margin-left: 6px; font-size: 11px; opacity: 0.7; font-family: inherit; }
+kbd.pre { margin-left: 0; margin-right: 6px; }
 
 .practice-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 10px; }
 .head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -250,14 +270,14 @@ tr.ng td.played { color: var(--wrong); font-weight: 600; }
 tr.ok td.played { color: var(--correct); }
 .actions { display: flex; gap: 12px; margin-top: 20px; }
 
-footer { padding: 10px 16px 10px; border-top: 1px solid var(--line); background: var(--surface); }
+footer { padding: 10px 16px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
 .footer-row { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 6px; }
 #keyboard[hidden] + .footer-row { margin-top: 0; }
 .hint { font-size: 12px; color: var(--muted); text-align: center; }
 #kb-toggle { padding: 2px 10px; font-size: 12px; color: var(--muted); }
 
 /* 仮想鍵盤 */
-#keyboard { overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; user-select: none; touch-action: none; }
+#keyboard { overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
 .vkb-whites { position: relative; display: flex; width: max-content; margin: 0 auto; }
 .vkb { display: block; }
 .vkb-key { cursor: pointer; }
@@ -362,7 +382,6 @@ td.note { font-weight: 600; }
 .panel.wide { max-width: 1200px; }
 .score {
   height: calc(100vh - 250px);
-  min-height: 320px;
   overflow: auto;
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -409,3 +428,37 @@ body[data-view='song'] main, body[data-view='flow'] main { padding-top: 14px; pa
 
 .offline-status { font-size: 12px; color: var(--muted); }
 .offline-status::before { content: '✓ '; color: var(--correct); }
+
+/*
+ * 曲モードは画面の高さにぴったり収め、楽譜が残りの高さをすべて使う（鍵盤の表示・非表示、iPad の縦横どちらでも）。
+ * ページ全体はスクロールさせず、楽譜の枠の中だけがスクロールする
+ */
+body[data-view='song'] { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+body[data-view='song'] main { min-height: 0; }
+#song:not([hidden]) { display: flex; flex-direction: column; min-height: 0; }
+#song .score { flex: 1 1 auto; height: auto; min-height: 200px; }
+#song .practice-head, #song .song-foot { flex: 0 0 auto; }
+
+/* タッチ操作の端末（iPad など）: 指で押しやすい大きさにする */
+@media (pointer: coarse) {
+  :root { --white-w: 38px; --black-w: 24px; }
+  button, .file-button { min-height: 44px; }
+  button.small, .file-button.small { min-height: 38px; }
+  #kb-toggle, #fullscreen-toggle { min-height: 34px; }
+  .seg label { padding: 9px 18px; font-size: 15px; }
+  .tile { padding: 16px 14px 14px; }
+  input[type='number'], select { padding: 8px 10px; }
+  input[type='checkbox'] { width: 22px; height: 22px; }
+  .vkb-key.white { height: 150px; }
+  .vkb-key.black { height: 95px; }
+  /* 鍵盤は横になぞるとスクロールする（軽く押せば音になる） */
+  #keyboard { touch-action: pan-x; }
+  /* PC キーボードの案内とショートカットキーの表示は出さない */
+  #octave, kbd { display: none; }
+}
+
+/* 画面の低い端末（iPad の横向きなど）では、読み返し用の小さな譜面を小さくして楽譜に高さを回す */
+@media (max-height: 900px) {
+  .mini-staff svg { width: 150px !important; }
+  .song-foot { margin-top: 8px; min-height: 0; }
+}

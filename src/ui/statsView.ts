@@ -183,24 +183,42 @@ function attachTooltip(container: HTMLElement, stats: Map<string, NoteStat>, ove
   tip.className = 'heat-tip';
   tip.hidden = true;
   container.append(tip);
+  let pinned: HTMLElement | null = null;
+  const show = (cell: HTMLElement) => {
+    const s = stats.get(cell.dataset.key!);
+    const [clef] = cell.dataset.key!.split(':') as [Clef];
+    tip.innerHTML = s
+      ? `<b>${cell.dataset.name}</b>（${CLEF_LABELS[clef]}）<br>
+         正答率 ${Math.round(s.accuracy * 100)}%（直近 ${s.correct}/${s.count}、全 ${s.totalCount} 回）<br>
+         正解時の平均反応 ${fmtMs(s.avgCorrectReactionMs)}<br>
+         ${s.confusions.length ? `押し間違えた音: ${confusionText(s)}<br>` : ''}
+         出やすさ ×${noteWeight(s, overall).toFixed(1)}`
+      : `<b>${cell.dataset.name}</b>（${CLEF_LABELS[clef]}）<br>まだ出題されていません`;
+    tip.hidden = false;
+    const c = container.getBoundingClientRect();
+    const r = cell.getBoundingClientRect();
+    tip.style.left = `${Math.min(r.left - c.left, c.width - 260)}px`;
+    tip.style.top = `${r.bottom - c.top + 6}px`;
+  };
   container.querySelectorAll<HTMLElement>('.heat-cell[data-key]').forEach((cell) => {
-    cell.addEventListener('pointerenter', () => {
-      const s = stats.get(cell.dataset.key!);
-      const [clef] = cell.dataset.key!.split(':') as [Clef];
-      tip.innerHTML = s
-        ? `<b>${cell.dataset.name}</b>（${CLEF_LABELS[clef]}）<br>
-           正答率 ${Math.round(s.accuracy * 100)}%（直近 ${s.correct}/${s.count}、全 ${s.totalCount} 回）<br>
-           正解時の平均反応 ${fmtMs(s.avgCorrectReactionMs)}<br>
-           ${s.confusions.length ? `押し間違えた音: ${confusionText(s)}<br>` : ''}
-           出やすさ ×${noteWeight(s, overall).toFixed(1)}`
-        : `<b>${cell.dataset.name}</b>（${CLEF_LABELS[clef]}）<br>まだ出題されていません`;
-      tip.hidden = false;
-      const c = container.getBoundingClientRect();
-      const r = cell.getBoundingClientRect();
-      tip.style.left = `${Math.min(r.left - c.left, c.width - 260)}px`;
-      tip.style.top = `${r.bottom - c.top + 6}px`;
+    // マウスはホバーで出す。タッチ（iPad など）はタップで出し、もう一度タップか、表のほかの場所のタップで消す
+    cell.addEventListener('pointerenter', (e) => e.pointerType === 'mouse' && show(cell));
+    cell.addEventListener('pointerleave', (e) => e.pointerType === 'mouse' && (tip.hidden = true));
+    cell.addEventListener('click', (e) => {
+      if ((e as PointerEvent).pointerType === 'mouse') return;
+      e.stopPropagation();
+      if (pinned === cell && !tip.hidden) {
+        tip.hidden = true;
+        pinned = null;
+        return;
+      }
+      pinned = cell;
+      show(cell);
     });
-    cell.addEventListener('pointerleave', () => (tip.hidden = true));
+  });
+  container.addEventListener('click', () => {
+    tip.hidden = true;
+    pinned = null;
   });
 }
 

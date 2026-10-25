@@ -84,6 +84,10 @@ export class SongPractice {
   private settings: SongSettings | null = null;
   private steps: Step[] = [];
   private outcomes: StepOutcome[] = [];
+  /** outcomes と同じ順の記録。待機モードでは「戻る」で取り消せるよう、終わるまで（または画面を離れるまで）保存しない */
+  private records: AnswerRecord[] = [];
+  /** records のうち保存済みの数 */
+  private saved = 0;
   private running = false;
 
   // 待機モード
@@ -146,6 +150,8 @@ export class SongPractice {
     this.steps = buildSteps(this.loaded.entries, settings.hands);
     if (!this.steps.length) throw new Error('判定する音がありません（片手モードの手の選び方を確かめてください）');
     this.outcomes = [];
+    this.records = [];
+    this.saved = 0;
     this.owners.clear();
     this.optionalTargets.clear();
     this.running = true;
@@ -165,6 +171,7 @@ export class SongPractice {
     // 最後まで弾き終えたら、残っているタイの後ろ側にも色を付ける
     if (this.outcomes.length === this.steps.length) this.score.revealTiesUpTo(Infinity);
     this.score.hideCursor();
+    this.flush();
     this.cb.finished({
       title: this.title,
       settings: this.settings!,
@@ -179,6 +186,27 @@ export class SongPractice {
     if (!this.running) return;
     if (this.settings!.songMode === 'wait') this.pressWait(ev);
     else this.pressTempo(ev);
+  }
+
+  /** まだ保存していない記録を保存する（終了時のほか、画面を離れるときにも呼ぶ） */
+  flush(): void {
+    for (; this.saved < this.records.length; this.saved++) this.cb.persist(this.records[this.saved]);
+  }
+
+  /**
+   * 待機モードで、1つ前の位置に戻って弾き直す。戻った位置からいまの位置までの色と結果は取り消す
+   * （保存前の記録も取り消すので、統計には弾き直した結果だけが残る）
+   */
+  back(): void {
+    if (!this.running || this.settings!.songMode !== 'wait') return;
+    window.clearTimeout(this.settleTimer);
+    window.clearTimeout(this.hintTimer);
+    const target = Math.max(0, this.current - 1);
+    for (let i = target; i <= this.current; i++) for (const n of this.steps[i].notes) this.paint(n, null);
+    this.outcomes.length = target;
+    this.records.length = target;
+    this.saved = Math.min(this.saved, target);
+    this.showWaitStep(target, []);
   }
 
   /** 待機モードで、いまの位置を飛ばして次へ進む（弾けなかった位置として記録する） */
@@ -384,7 +412,7 @@ export class SongPractice {
       const hits = new Set(this.waitJudge!.hits);
       this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'missing'), []);
       this.cb.feedback(
-        `<span class="missing">足りない音: ${this.names(missing.map((n) => n.midi), step)}</span><span class="sub">弾き直すか、→ キーで飛ばせます</span>`,
+        `<span class="missing">足りない音: ${this.names(missing.map((n) => n.midi), step)}</span><span class="sub">弾き直すか、「飛ばす」（→ キー）で先へ進めます</span>`,
         '',
       );
     }, HINT_MS);
@@ -552,7 +580,7 @@ export class SongPractice {
     const s = this.settings!;
     const expected = o.step.notes.map((n) => n.midi);
     const timing = o.deviations.length ? o.deviations.reduce((a, b) => a + b, 0) / o.deviations.length : undefined;
-    this.cb.persist({
+    const record: AnswerRecord = {
       timestamp: Date.now(),
       mode: 'song',
       song: this.title,
@@ -567,7 +595,10 @@ export class SongPractice {
       reactionMs: o.reactionMs ?? timing ?? 0,
       attempts: 1 + o.extras.length,
       ...(timing === undefined ? {} : { timingMs: timing }),
-    });
+    };
+    this.records.push(record);
+    // テンポモードは戻れないので、すぐ保存する
+    if (s.songMode === 'tempo') this.flush();
   }
 
   /** 現在のステップを小さな大譜表に描く（押した音の読み返し用）。中央ド以上は上段 */
@@ -585,7 +616,7 @@ export class SongPractice {
     });
   }
 
-  private paint(n: StepNote, color: string): void {
+  private paint(n: StepNote, color: string | null): void {
     for (const r of n.refs) this.score.colorNote(r.entryIndex, r.rawIndex, color);
   }
 

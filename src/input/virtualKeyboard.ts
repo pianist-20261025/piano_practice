@@ -53,7 +53,10 @@ export class VirtualKeyboard {
 
   /** 指定の音が見える位置までスクロールする */
   scrollToNote(note: number): void {
-    this.keys.get(note)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    const key = this.keys.get(note);
+    if (!key) return;
+    // 鍵盤の中だけを横に動かす（scrollIntoView だとページ全体も縦に動いてしまう）
+    this.container.scrollLeft = key.offsetLeft + key.offsetWidth / 2 - this.container.clientWidth / 2;
   }
 
   private handleDown = (e: PointerEvent) => {

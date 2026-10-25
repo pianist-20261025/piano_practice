@@ -26,6 +26,7 @@ import type { HandSetting } from '../score/steps';
 import type { Rhythm } from '../generator/phrase';
 import { FlowPractice, summarizeFlow, type FlowResult } from './flowMode';
 import { SongPractice, summarizeSong, type SongMode, type SongResult } from './songMode';
+import { fullscreenSupported, isFullscreen, isIPad, isStandalone, onFullscreenChange, toggleFullscreen } from './platform';
 import { renderStats } from './statsView';
 
 interface Settings {
@@ -167,6 +168,7 @@ export class App {
     pc.attach();
     this.showOctave(pc.base);
     new MidiInput(this.hub.emit, (s) => this.showMidiStatus(s), this.hub.setPedal).start();
+    this.setupTouchDevice();
 
     this.hub.subscribe((ev) => {
       this.keyboard.setHeld(ev.note, ev.type === 'on');
@@ -189,6 +191,9 @@ export class App {
     });
     $('#song-stop').addEventListener('click', () => this.finishSession());
     $('#song-skip').addEventListener('click', () => this.song.skip());
+    $('#song-back').addEventListener('click', () => this.song.back());
+    // タブを閉じる・切り替えるときに、曲モードのまだ保存していない記録を保存する
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && this.song.flush());
     this.flow = new FlowPractice($('#flow-viewport'), $('#flow-strip'), {
       persist: (record) => this.persistRecord(record),
       finished: (result) => this.finishFlow(result),
@@ -213,6 +218,7 @@ export class App {
       if (e.code === 'Enter' && !this.running && !isFormControl(e.target)) this.startSession();
       if (e.code === 'Escape' && this.running) this.finishSession();
       if (e.code === 'ArrowRight' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.skip();
+      if (e.code === 'ArrowLeft' && this.running && this.settings.mode === 'song' && !isFormControl(e.target)) this.song.back();
     });
     $('#show-stats').addEventListener('click', () => this.openStats());
     $('#kb-toggle').addEventListener('click', () => this.toggleKeyboard());
@@ -575,6 +581,7 @@ export class App {
     try {
       const title = await this.song.load(source.data, source.name);
       $('#song-skip').hidden = s.songMode !== 'wait';
+      $('#song-back').hidden = s.songMode !== 'wait';
       $('#song-title').innerHTML = `${escapeHtml(title)}<span class="tag">${SONG_MODE_LABELS[s.songMode]}・${HAND_LABELS[s.hands]}</span>`;
       this.running = true;
       this.song.start({
@@ -787,12 +794,35 @@ export class App {
     this.keyboard.scrollToNote(pitchToMidi(pitchFromDiatonic(mid)));
   }
 
+  /** iPad などで使うための準備（全画面ボタン、ファイル選択） */
+  private setupTouchDevice(): void {
+    const button = $<HTMLButtonElement>('#fullscreen-toggle');
+    // ホーム画面から開いたときは、もともと枠なしなので出さない
+    if (fullscreenSupported() && !isStandalone()) {
+      button.hidden = false;
+      const label = () => (button.textContent = isFullscreen() ? '全画面を解除' : '全画面');
+      button.addEventListener('click', () => toggleFullscreen());
+      onFullscreenChange(label);
+      label();
+    }
+    // iPad のファイル選択は .mxl などの拡張子を知らず選べなくなることがあるので、絞り込まない（読み込み時に確かめる）
+    if (isIPad()) $<HTMLInputElement>('#song-file').removeAttribute('accept');
+  }
+
   private showMidiStatus(status: MidiStatus): void {
     const el = $('#midi-status');
     el.className = 'midi-status';
+    const help = $('#midi-help');
+    help.hidden = true;
     if (status.kind === 'unsupported') {
-      el.textContent = 'このブラウザは Web MIDI 非対応（Chrome を使ってください）';
+      el.textContent = isIPad() ? 'MIDI 非対応（画面の鍵盤で入力）' : 'このブラウザは Web MIDI 非対応（Chrome を使ってください）';
       el.classList.add('warn');
+      if (isIPad()) {
+        help.innerHTML =
+          '<b>iPad の Safari では電子ピアノ（MIDI）をつなげません。</b>' +
+          '画面下の鍵盤で練習できます。電子ピアノで弾くには、Web MIDI に対応したブラウザアプリ（App Store の「Web MIDI Browser」など）でこのページを開いてください。';
+        help.hidden = false;
+      }
     } else if (status.kind === 'denied') {
       el.textContent = `MIDI を使えません: ${status.message}`;
       el.classList.add('warn');

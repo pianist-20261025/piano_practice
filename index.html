@@ -2,7 +2,12 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- iPad でホーム画面に追加したとき、ブラウザの枠なしのアプリとして開く -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="読譜" />
     <meta name="theme-color" content="#2f5d8a" />
     <meta name="description" content="電子ピアノをMIDIでつないで、読譜と初見演奏を鍛える練習アプリ" />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -12,13 +17,17 @@
   <body>
     <header>
       <h1>読譜トレーニング <span id="mode-label" class="mode">反射モード</span></h1>
-      <div id="midi-status" class="midi-status">MIDI を確認中…</div>
+      <div class="header-right">
+        <div id="midi-status" class="midi-status">MIDI を確認中…</div>
+        <button id="fullscreen-toggle" type="button" class="small ghost" hidden>全画面</button>
+      </div>
       <div id="offline-status" class="offline-status" hidden></div>
       <div id="storage-warning" class="storage-warning" hidden></div>
     </header>
 
     <main>
       <section id="setup" class="panel" hidden>
+        <div id="midi-help" class="notice" hidden></div>
         <form id="settings">
           <div class="mode-tiles" role="radiogroup" aria-label="練習モード">
             <label class="tile"><input type="radio" name="mode" value="reflex" /><span class="tile-title">反射</span><span class="tile-desc">単音を一瞬で読む</span></label>
@@ -189,6 +198,7 @@
             <div id="song-progress" class="head-sub"></div>
           </div>
           <div class="head-buttons">
+            <button id="song-back" class="ghost" title="待機モードで、1つ前の位置に戻って弾き直す"><kbd class="pre">←</kbd> 戻る</button>
             <button id="song-skip" class="ghost" title="待機モードで、いまの位置を飛ばす（弾けなかった位置として記録）">飛ばす <kbd>→</kbd></button>
             <button id="song-stop" class="ghost">終了 <kbd>Esc</kbd></button>
           </div>
