@@ -343,7 +343,9 @@ export class SongPractice {
       this.current = i;
       const step = this.steps[i];
       this.score.moveCursor(step.entryIndex);
-      this.score.revealTiesUpTo(step.time);
+      // 待機モードは弾いたらすぐ次の位置へ進むので、タイの後ろ側はカーソルがその位置を過ぎてから色を付ける
+      // （後ろ側と同じ拍に別の音があると、始まりの音を弾いた瞬間に後ろ側まで緑になってしまうため）
+      this.score.revealTiesUpTo(step.time, true);
       this.waitJudge = new WaitStepJudge(
         step.notes.map((n) => n.midi),
         this.settings!.judge,

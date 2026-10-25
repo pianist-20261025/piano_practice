@@ -26,23 +26,35 @@ const entries = [
 const steps = buildSteps(entries);
 
 describe('pickExcerpt', () => {
-  it('判定する音がある小節から始め、指定した長さの範囲を選ぶ', () => {
-    // 始まりの候補は 0,1,3,4。0.5 → 3 番目（measureIndex 3）、長さは 1 + floor(0.99 * 3) = 3
-    expect(pickExcerpt(steps, 1, 3, null, seq(0.5, 0.99))).toEqual({ from: 3, to: 4 });
-    expect(pickExcerpt(steps, 1, 3, null, seq(0, 0))).toEqual({ from: 0, to: 0 });
-    expect(pickExcerpt(steps, 2, 2, null, seq(0.3, 0))).toEqual({ from: 1, to: 2 });
+  // 乱数は 練習する小節 → 長さ → 範囲の頭 の順に使う。判定する音がある小節は 0,1,3,4
+  it('判定する音がある小節を選び、それを含む指定した長さの範囲にする', () => {
+    // 小節 3（0.5 → 4つのうち3番目）、長さ 1 + floor(0.99 * 3) = 3、頭は 1〜3 のうち 0 → 1
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 3, random: seq(0.5, 0.99, 0) })).toEqual({ from: 1, to: 3 });
+    // 頭を後ろへずらすと、選んだ小節が範囲の頭になる
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 3, random: seq(0.5, 0.99, 0.99) })).toEqual({ from: 3, to: 4 });
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 3, random: seq(0, 0, 0) })).toEqual({ from: 0, to: 0 });
   });
 
-  it('曲の終わりを越えるときは短くする', () => {
-    expect(pickExcerpt(steps, 3, 3, null, seq(0.9, 0))).toEqual({ from: 4, to: 4 });
+  it('曲の頭より前・終わりより後には出さない', () => {
+    expect(pickExcerpt(steps, { minLen: 3, maxLen: 3, random: seq(0, 0, 0) })).toEqual({ from: 0, to: 2 });
+    expect(pickExcerpt(steps, { minLen: 3, maxLen: 3, random: seq(0.9, 0, 0.99) })).toEqual({ from: 4, to: 4 });
+  });
+
+  it('重みの大きい小節ほど選ばれやすい', () => {
+    // 小節番号 2（measureIndex 1）だけ重み 7、ほかは 1 → 合計 10。0.1〜0.79 は小節 2
+    const weightOf = (m: number) => (m === 2 ? 7 : 1);
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 1, weightOf, random: seq(0.11, 0, 0) })).toEqual({ from: 1, to: 1 });
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 1, weightOf, random: seq(0.79, 0, 0) })).toEqual({ from: 1, to: 1 });
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 1, weightOf, random: seq(0.05, 0, 0) })).toEqual({ from: 0, to: 0 });
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 1, weightOf, random: seq(0.95, 0, 0) })).toEqual({ from: 4, to: 4 });
   });
 
   it('直前と同じ範囲は避ける', () => {
-    expect(pickExcerpt(steps, 1, 1, { from: 0, to: 0 }, seq(0, 0, 0.3, 0))).toEqual({ from: 1, to: 1 });
+    expect(pickExcerpt(steps, { minLen: 1, maxLen: 1, previous: { from: 0, to: 0 }, random: seq(0, 0, 0, 0.3, 0, 0) })).toEqual({ from: 1, to: 1 });
   });
 
   it('判定する音がなければ null', () => {
-    expect(pickExcerpt([], 1, 3)).toBeNull();
+    expect(pickExcerpt([], { minLen: 1, maxLen: 3 })).toBeNull();
   });
 });
 

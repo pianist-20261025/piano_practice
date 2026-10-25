@@ -9,27 +9,48 @@ export interface ExcerptRange {
   to: number;
 }
 
+export interface PickOptions {
+  /** 抜粋する小節数（最小・最大） */
+  minLen: number;
+  maxLen: number;
+  /** 直前に弾いた範囲（続けて同じ範囲を出さない） */
+  previous?: ExcerptRange | null;
+  /** 小節番号ごとの出やすさ（1 が基準。間違えやすい小節ほど大きくする）。なければどの小節も同じ */
+  weightOf?: (measureNumber: number) => number;
+  random?: () => number;
+}
+
 /**
  * 抜粋する範囲をランダムに選ぶ。
- * - 判定する音がある小節（steps に出てくる小節）から始める
- * - 長さは minLen〜maxLen 小節。曲の終わりを越えるときは短くする
- * - 直前と同じ範囲は（ほかに選べる範囲があれば）避ける
+ * 1. 判定する音がある小節から、weightOf の重みで「練習する小節」を1つ選ぶ
+ * 2. 長さを minLen〜maxLen 小節から選び、その小節を含むように範囲の位置をずらす
+ *    （苦手な小節が、抜粋の頭にも途中にも終わりにも来るように）。曲の頭・終わりを越えるときは詰める
+ * 3. 直前と同じ範囲は（ほかに選べる範囲があれば）避ける
  */
-export function pickExcerpt(
-  steps: readonly Step[],
-  minLen: number,
-  maxLen: number,
-  previous: ExcerptRange | null = null,
-  random: () => number = Math.random,
-): ExcerptRange | null {
-  const starts = [...new Set(steps.map((s) => s.measureIndex))].sort((a, b) => a - b);
-  if (!starts.length) return null;
-  const last = starts[starts.length - 1];
-  const lo = Math.max(1, Math.min(minLen, maxLen));
-  const hi = Math.max(lo, maxLen);
+export function pickExcerpt(steps: readonly Step[], options: PickOptions): ExcerptRange | null {
+  const { previous = null, weightOf = () => 1, random = Math.random } = options;
+  const measures = new Map<number, number>();
+  for (const s of steps) if (!measures.has(s.measureIndex)) measures.set(s.measureIndex, s.measureNumber);
+  const candidates = [...measures.keys()].sort((a, b) => a - b);
+  if (!candidates.length) return null;
+  const first = candidates[0];
+  const last = candidates[candidates.length - 1];
+  const weights = candidates.map((m) => Math.max(0, weightOf(measures.get(m)!)) || 0);
+  const total = weights.reduce((a, b) => a + b, 0);
+  const lo = Math.max(1, Math.min(options.minLen, options.maxLen));
+  const hi = Math.max(lo, options.maxLen);
   const choose = (): ExcerptRange => {
-    const from = starts[Math.floor(random() * starts.length)];
+    let focus = candidates[candidates.length - 1];
+    if (total > 0) {
+      let r = random() * total;
+      focus = candidates.find((_, i) => (r -= weights[i]) < 0) ?? focus;
+    } else {
+      focus = candidates[Math.floor(random() * candidates.length)];
+    }
     const len = lo + Math.floor(random() * (hi - lo + 1));
+    // focus を含む範囲の頭の候補: focus - len + 1 〜 focus（曲の頭より前には出さない）
+    const earliest = Math.max(first, focus - len + 1);
+    const from = earliest + Math.floor(random() * (focus - earliest + 1));
     return { from, to: Math.min(last, from + len - 1) };
   };
   let range = choose();

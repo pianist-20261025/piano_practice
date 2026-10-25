@@ -51,11 +51,19 @@
                 <label><input type="radio" name="songRange" value="excerpt" />ランダム抜粋</label>
               </div>
               <span id="excerpt-options">
-                <label><input id="excerpt-min" type="number" min="1" max="8" aria-label="抜粋する小節数（最小）" /></label>〜<label
-                  ><input id="excerpt-max" type="number" min="1" max="8" aria-label="抜粋する小節数（最大）" /> 小節</label
+                <span class="range"
+                  ><input id="excerpt-min" type="number" min="1" max="8" aria-label="抜粋する小節数（最小）" />〜<input
+                    id="excerpt-max"
+                    type="number"
+                    min="1"
+                    max="8"
+                    aria-label="抜粋する小節数（最大）"
+                  />
+                  小節</span
                 >
+                <label class="check"><input id="excerpt-focus-weak" type="checkbox" /> 苦手な小節を多めに</label>
               </span>
-              <span class="hint-inline">抜粋は、曲からランダムに選んだ数小節だけを弾き、ちゃんと弾けたかを確かめる</span>
+              <span class="hint-inline">抜粋は、ランダムに選んだ数小節だけを弾いて確かめる。「苦手な小節を多めに」で、間違えやすい小節とまだ弾いていない小節が出やすくなる</span>
             </div>
             <div class="field">
               <span class="field-label">進め方</span>

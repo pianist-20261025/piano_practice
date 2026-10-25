@@ -162,11 +162,15 @@ export class OsmdScore {
     }
   }
 
-  /** 曲頭から time（4分音符単位）までにあるタイの後ろ側の音に、始まりの音と同じ色を付ける */
-  revealTiesUpTo(time: number): void {
-    const due = this.pendingTies.filter((p) => p.time <= time + 1e-3);
+  /**
+   * 曲頭から time（4分音符単位）までにあるタイの後ろ側の音に、始まりの音と同じ色を付ける。
+   * before なら time ちょうどの音は含めない（カーソルがその位置を過ぎてから色を付けるとき）
+   */
+  revealTiesUpTo(time: number, before = false): void {
+    const limit = before ? time - 1e-3 : time + 1e-3;
+    const due = this.pendingTies.filter((p) => p.time <= limit);
     if (!due.length) return;
-    this.pendingTies = this.pendingTies.filter((p) => p.time > time + 1e-3);
+    this.pendingTies = this.pendingTies.filter((p) => p.time > limit);
     for (const p of due) this.paintNote(p.note, p.color);
   }
 

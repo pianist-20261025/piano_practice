@@ -12,6 +12,7 @@ import { KEY_FIFTHS_RANGE, keyLabel, spellMidiInKey } from '../music/key';
 import { diatonicIndex, pitchFromDiatonic, pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type StaffColors, type StaffLayout } from '../render/staffRenderer';
 import { makeWeightFn } from '../stats/noteStats';
+import { makeMeasureWeightFn } from '../stats/songStats';
 import { summarize, type AnswerRecord, type Mode } from '../stats/session';
 import {
   IndexedDbRecordStore,
@@ -40,6 +41,8 @@ interface Settings {
   /** 抜粋する小節数（最小〜最大） */
   excerptMin: number;
   excerptMax: number;
+  /** 抜粋で、間違えやすい小節（とまだ弾いていない小節）を多めに出す */
+  excerptFocusWeak: boolean;
   /** null なら楽譜どおり */
   songBpm: number | null;
   toleranceMs: number;
@@ -77,6 +80,7 @@ const DEFAULT_SETTINGS: Settings = {
   songRange: 'whole',
   excerptMin: 1,
   excerptMax: 3,
+  excerptFocusWeak: true,
   songBpm: null,
   toleranceMs: 100,
   metronome: true,
@@ -660,7 +664,16 @@ export class App {
     const ex = this.excerpt;
     if (!ex || ex.ending) return;
     const s = this.settings;
-    const range = retry && ex.range ? ex.range : pickExcerpt(this.song.allSteps(s.hands), s.excerptMin, s.excerptMax, ex.range);
+    const range =
+      retry && ex.range
+        ? ex.range
+        : pickExcerpt(this.song.allSteps(s.hands), {
+            minLen: s.excerptMin,
+            maxLen: s.excerptMax,
+            previous: ex.range,
+            // 記録はこの抜粋を弾き終えた時点で history に入っているので、いま間違えた小節もすぐ反映される
+            weightOf: s.excerptFocusWeak ? makeMeasureWeightFn(this.history, this.songTitle, s.hands) : undefined,
+          });
     if (!range) {
       this.running = false;
       this.excerpt = null;
@@ -1031,6 +1044,7 @@ export class App {
     radio('songRange').value = s.songRange;
     $<HTMLInputElement>('#excerpt-min').value = String(s.excerptMin);
     $<HTMLInputElement>('#excerpt-max').value = String(s.excerptMax);
+    $<HTMLInputElement>('#excerpt-focus-weak').checked = s.excerptFocusWeak;
     $<HTMLInputElement>('#song-bpm').value = s.songBpm === null ? '' : String(s.songBpm);
     $<HTMLInputElement>('#tolerance').value = String(s.toleranceMs);
     $<HTMLInputElement>('#metronome').checked = s.metronome;
@@ -1071,6 +1085,7 @@ export class App {
         songRange: radio('songRange').value === 'excerpt' ? 'excerpt' : 'whole',
         excerptMin: Math.min(excerptA, excerptB),
         excerptMax: Math.max(excerptA, excerptB),
+        excerptFocusWeak: $<HTMLInputElement>('#excerpt-focus-weak').checked,
         songBpm: bpmRaw ? clampInt(bpmRaw, 20, 240, 80) : null,
         toleranceMs: clampInt($<HTMLInputElement>('#tolerance').value, 20, 300, DEFAULT_SETTINGS.toleranceMs),
         metronome: $<HTMLInputElement>('#metronome').checked,
