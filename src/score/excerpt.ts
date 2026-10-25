@@ -84,3 +84,21 @@ export function excerptLabel(steps: readonly Step[], entries: readonly RawEntry[
   const b = numberOf(range.to);
   return a === b ? `小節 ${a}` : `小節 ${a}〜${b}`;
 }
+
+/**
+ * 楽譜に書かれた小節番号で指定した範囲（両端を含む）を、小節の通し番号の範囲にする。
+ * a > b なら入れ替える。その番号の小節が1つもなければ null
+ */
+export function rangeFromMeasureNumbers(entries: readonly RawEntry[], a: number, b: number): ExcerptRange | null {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  const indices = entries.filter((e) => e.measureNumber >= lo && e.measureNumber <= hi).map((e) => e.measureIndex);
+  return indices.length ? { from: Math.min(...indices), to: Math.max(...indices) } : null;
+}
+
+/** 楽譜に書かれた最初と最後の小節番号（範囲を指定するときの案内用） */
+export function measureNumberSpan(entries: readonly RawEntry[]): { first: number; last: number } | null {
+  if (!entries.length) return null;
+  const numbers = entries.map((e) => e.measureNumber);
+  return { first: Math.min(...numbers), last: Math.max(...numbers) };
+}

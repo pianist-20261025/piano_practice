@@ -9,7 +9,7 @@ import type { Clef } from '../music/clef';
 import { spellMidiInKey } from '../music/key';
 import { pitchName, pitchToMidi, type Pitch } from '../music/pitch';
 import { StaffRenderer, type NoteState, type StaffColors } from '../render/staffRenderer';
-import { excerptEntries, excerptLabel, type ExcerptRange } from '../score/excerpt';
+import { excerptEntries, excerptLabel, measureNumberSpan, rangeFromMeasureNumbers, type ExcerptRange } from '../score/excerpt';
 import { OsmdScore, type LoadedScore } from '../score/osmdScore';
 import { buildSteps, type HandSetting, type Step, type StepNote } from '../score/steps';
 import type { AnswerRecord } from '../stats/session';
@@ -161,6 +161,16 @@ export class SongPractice {
   /** 曲全体の判定するステップ（抜粋する範囲を選ぶのに使う） */
   allSteps(hands: HandSetting): Step[] {
     return this.loaded ? buildSteps(this.loaded.entries, hands) : [];
+  }
+
+  /** 楽譜に書かれた小節番号 a〜b の範囲（その番号の小節がなければ null） */
+  measureRange(a: number, b: number): ExcerptRange | null {
+    return this.loaded ? rangeFromMeasureNumbers(this.loaded.entries, a, b) : null;
+  }
+
+  /** 楽譜に書かれた最初と最後の小節番号 */
+  get measureSpan(): { first: number; last: number } | null {
+    return this.loaded ? measureNumberSpan(this.loaded.entries) : null;
   }
 
   /** 範囲の表示（「小節 5〜7」など） */

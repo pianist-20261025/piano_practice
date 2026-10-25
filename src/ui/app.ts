@@ -36,8 +36,11 @@ interface Settings {
   /** 曲モード */
   songMode: SongMode;
   hands: HandSetting;
-  /** 曲全体を弾くか、ランダムに抜き出した数小節（抜粋）を弾くか */
+  /** 曲全体を弾くか、ランダムに抜き出した数小節（抜粋）を弾くか、指定した小節を繰り返し弾くか */
   songRange: SongRange;
+  /** 小節を指定するときの範囲（楽譜に書かれた小節番号） */
+  measureFrom: number;
+  measureTo: number;
   /** 抜粋する小節数（最小〜最大） */
   excerptMin: number;
   excerptMax: number;
@@ -78,6 +81,8 @@ const DEFAULT_SETTINGS: Settings = {
   songMode: 'wait',
   hands: 'both',
   songRange: 'whole',
+  measureFrom: 1,
+  measureTo: 4,
   excerptMin: 1,
   excerptMax: 3,
   excerptFocusWeak: true,
@@ -112,7 +117,9 @@ const NEXT_DELAY_MS = 350;
 const LAYOUT_LABELS: Record<StaffLayout, string> = { treble: 'ト音記号', bass: 'ヘ音記号', grand: '大譜表' };
 const MODE_LABELS: Record<Mode, string> = { reflex: '反射モード', shape: '形で読むモード', song: '曲モード', flow: '流れ読みモード' };
 const SONG_MODE_LABELS: Record<SongMode, string> = { wait: '待機', tempo: 'テンポ' };
-type SongRange = 'whole' | 'excerpt';
+type SongRange = 'whole' | 'excerpt' | 'measures';
+const SONG_RANGES: readonly SongRange[] = ['whole', 'excerpt', 'measures'];
+const SONG_RANGE_TAGS: Record<SongRange, string> = { whole: '', excerpt: '抜粋・', measures: '小節指定・' };
 /** 抜粋する小節数の上限 */
 const EXCERPT_MAX_MEASURES = 8;
 const HAND_LABELS: Record<HandSetting, string> = { both: '両手', right: '右手', left: '左手' };
@@ -178,10 +185,12 @@ export class App {
   private bundledSongs: BundledSong[] = [];
   private librarySongs: LibrarySong[] = [];
   /**
-   * 抜粋の練習中の状態。results は弾き終えた抜粋の結果（弾き直しも1回に数える）。
-   * between は、1つの抜粋を弾き終えて「もう一度 / 次の抜粋」を待っているところ
+   * 抜粋・小節指定の練習中の状態。results は弾き終えた範囲の結果（弾き直しも1回に数える）。
+   * between は、1つの範囲を弾き終えて「もう一度 / 次の抜粋」を待っているところ。
+   * fixed は小節を指定したとき（同じ範囲を繰り返す。次の抜粋はない）
    */
-  private excerpt: { results: SongResult[]; range: ExcerptRange | null; between: boolean; ending: boolean } | null = null;
+  private excerpt: { results: SongResult[]; range: ExcerptRange | null; between: boolean; ending: boolean; fixed: boolean } | null =
+    null;
 
   start(): void {
     this.keyboard = new VirtualKeyboard($('#keyboard'), this.hub.emit);
@@ -242,7 +251,7 @@ export class App {
       // 抜粋を弾き終えたところ: Enter は目立たせているほう（弾けたら次、間違えたらもう一度）
       if (this.excerpt?.between && !isFormControl(e.target)) {
         if (e.code === 'KeyR') this.playExcerpt(true);
-        if (e.code === 'KeyN') this.playExcerpt(false);
+        if (e.code === 'KeyN' && !this.excerpt.fixed) this.playExcerpt(false);
         if (e.code === 'Enter') this.playExcerpt($('#excerpt-retry').classList.contains('primary'));
       }
       if (e.code === 'Escape' && this.running) this.finishSession();
@@ -621,8 +630,18 @@ export class App {
       $('#excerpt-actions').hidden = true;
       this.running = true;
       if (s.songRange === 'excerpt') {
-        this.excerpt = { results: [], range: null, between: false, ending: false };
+        this.excerpt = { results: [], range: null, between: false, ending: false, fixed: false };
         this.playExcerpt(false);
+        return;
+      }
+      if (s.songRange === 'measures') {
+        const range = this.song.measureRange(s.measureFrom, s.measureTo);
+        if (!range) {
+          const span = this.song.measureSpan;
+          throw new Error(`小節 ${s.measureFrom}〜${s.measureTo} がありません${span ? `（この曲は小節 ${span.first}〜${span.last}）` : ''}`);
+        }
+        this.excerpt = { results: [], range, between: false, ending: false, fixed: true };
+        this.playExcerpt(true);
         return;
       }
       this.excerpt = null;
@@ -655,7 +674,8 @@ export class App {
     const wait = s.songMode === 'wait';
     $('#song-skip').hidden = !wait;
     $('#song-back').hidden = !wait;
-    const tags = [rangeLabel ? `抜粋 ${rangeLabel}` : '', SONG_MODE_LABELS[s.songMode], HAND_LABELS[s.hands]].filter(Boolean).join('・');
+    const range = !rangeLabel ? '' : this.excerpt?.fixed ? rangeLabel : `抜粋 ${rangeLabel}`;
+    const tags = [range, SONG_MODE_LABELS[s.songMode], HAND_LABELS[s.hands]].filter(Boolean).join('・');
     $('#song-title').innerHTML = `${escapeHtml(this.songTitle)}<span class="tag">${tags}</span>`;
   }
 
@@ -674,18 +694,20 @@ export class App {
             // 記録はこの抜粋を弾き終えた時点で history に入っているので、いま間違えた小節もすぐ反映される
             weightOf: s.excerptFocusWeak ? makeMeasureWeightFn(this.history, this.songTitle, s.hands) : undefined,
           });
-    if (!range) {
+    try {
+      if (!range) throw new Error('判定する音がありません（片手モードの手の選び方を確かめてください）');
+      ex.range = range;
+      ex.between = false;
+      $('#excerpt-actions').hidden = true;
+      this.showSongHead(this.song.rangeLabel(range, s.hands));
+      this.song.start(this.songSettings(), range);
+    } catch (e) {
+      // 指定した小節に、判定する手の音がないときなど
       this.running = false;
       this.excerpt = null;
-      alert('判定する音がありません（片手モードの手の選び方を確かめてください）');
+      alert(`始められませんでした: ${e instanceof Error ? e.message : String(e)}`);
       this.showView('setup');
-      return;
     }
-    ex.range = range;
-    ex.between = false;
-    $('#excerpt-actions').hidden = true;
-    this.showSongHead(this.song.rangeLabel(range, s.hands));
-    this.song.start(this.songSettings(), range);
   }
 
   /** 1つの抜粋を弾き終えた。結果を出して「もう一度 / 次の抜粋」を待つ */
@@ -695,20 +717,29 @@ export class App {
     const s = summarizeSong(result);
     const clean = s.played > 0 && s.correct === s.played;
     const feedback = $('#song-feedback');
+    // 小節を指定したときは同じ範囲を繰り返すので、Enter はいつも「もう一度」
+    const retryFirst = ex.fixed || !clean;
+    const enter = retryFirst ? 'Enter でもう一度' : 'Enter で次の抜粋';
     if (clean) {
-      feedback.innerHTML = `✓ ${result.rangeLabel} を弾けました<span class="sub">Enter で次の抜粋</span>`;
+      feedback.innerHTML = `✓ ${result.rangeLabel} を弾けました<span class="sub">${enter}</span>`;
       feedback.className = 'ok';
     } else {
       const measures = [...new Set(result.outcomes.filter((o) => !o.correct).map((o) => o.step.measureNumber))];
-      feedback.innerHTML = `${result.rangeLabel}: ${s.correct} / ${s.played} か所<span class="sub">間違えた小節 ${measures.join('・')}　Enter でもう一度</span>`;
+      feedback.innerHTML = `${result.rangeLabel}: ${s.correct} / ${s.played} か所<span class="sub">間違えた小節 ${measures.join('・')}　${enter}</span>`;
       feedback.className = 'ng';
     }
-    $('#excerpt-retry').classList.toggle('primary', !clean);
-    $('#excerpt-next').classList.toggle('primary', clean);
+    $('#excerpt-retry').classList.toggle('primary', retryFirst);
+    $('#excerpt-next').classList.toggle('primary', !retryFirst);
+    $('#excerpt-next').hidden = ex.fixed;
     $('#excerpt-actions').hidden = false;
     const done = ex.results.length;
     const cleanCount = ex.results.filter(isCleanExcerpt).length;
-    $('#song-progress').textContent = `抜粋 ${done} 回　ミスなし ${cleanCount} 回`;
+    // 続けて何回ミスなしで弾けたか（小節指定で、仕上がったかの目安）
+    let streak = 0;
+    for (let i = ex.results.length - 1; i >= 0 && isCleanExcerpt(ex.results[i]); i--) streak++;
+    $('#song-progress').textContent = ex.fixed
+      ? `${done} 回目　ミスなし ${cleanCount} 回${streak >= 2 ? `（${streak} 回続けて）` : ''}`
+      : `抜粋 ${done} 回　ミスなし ${cleanCount} 回`;
   }
 
   private async songSource(): Promise<{ name: string; data: string }> {
@@ -852,18 +883,19 @@ export class App {
     this.showView('result');
   }
 
-  /** 抜粋の練習を終えた。弾いた抜粋ごとの結果を出す */
+  /** 抜粋・小節指定の練習を終えた。弾いた範囲ごとの結果を出す */
   private finishExcerpts(): void {
     const results = this.excerpt?.results ?? [];
+    const fixed = this.excerpt?.fixed ?? false;
     this.excerpt = null;
     this.running = false;
     $('#excerpt-actions').hidden = true;
     const outcomes = results.flatMap((r) => r.outcomes);
     const correct = outcomes.filter((o) => o.correct).length;
     const clean = results.filter(isCleanExcerpt).length;
-    $('#result-title').textContent = `結果: ${this.songTitle}（抜粋）`;
+    $('#result-title').textContent = `結果: ${this.songTitle}（${fixed && results.length ? results[0].rangeLabel : '抜粋'}）`;
     const tiles = [
-      `<div class="stat"><span class="label">ミスなしで弾けた抜粋</span><span class="value">${clean}<small> / ${results.length}</small></span><span class="sub">弾き直しも1回に数える</span></div>`,
+      `<div class="stat"><span class="label">${fixed ? 'ミスなしで弾けた回数' : 'ミスなしで弾けた抜粋'}</span><span class="value">${clean}<small> / ${results.length}</small></span><span class="sub">${fixed ? '弾いた回数のうち' : '弾き直しも1回に数える'}</span></div>`,
       `<div class="stat"><span class="label">正答率</span><span class="value">${outcomes.length ? Math.round((correct / outcomes.length) * 100) : 0}<small>%</small></span><span class="sub">${correct} / ${outcomes.length} か所</span></div>`,
     ];
     if (this.settings.songMode === 'wait') {
@@ -894,7 +926,7 @@ export class App {
       const verdict = isCleanExcerpt(r) ? '○' : `${ok} / ${r.outcomes.length}`;
       return `<tr class="${isCleanExcerpt(r) ? 'ok' : 'ng'}"><td>${i + 1}</td><td>${r.rangeLabel}</td><td>${verdict}${partial}</td><td class="small">${escapeHtml(mistakes.join('、')) || '—'}</td></tr>`;
     });
-    $('#answers').innerHTML = rows.join('') || '<tr><td colspan="4">弾いた抜粋はありません</td></tr>';
+    $('#answers').innerHTML = rows.join('') || `<tr><td colspan="4">${fixed ? '弾いた回はありません' : '弾いた抜粋はありません'}</td></tr>`;
     this.showView('result');
   }
 
@@ -1042,6 +1074,8 @@ export class App {
     radio('songMode').value = s.songMode;
     radio('hands').value = s.hands;
     radio('songRange').value = s.songRange;
+    $<HTMLInputElement>('#measure-from').value = String(s.measureFrom);
+    $<HTMLInputElement>('#measure-to').value = String(s.measureTo);
     $<HTMLInputElement>('#excerpt-min').value = String(s.excerptMin);
     $<HTMLInputElement>('#excerpt-max').value = String(s.excerptMax);
     $<HTMLInputElement>('#excerpt-focus-weak').checked = s.excerptFocusWeak;
@@ -1076,13 +1110,17 @@ export class App {
       const modeValue = radio('mode').value;
       const mode: Mode = modeValue === 'shape' || modeValue === 'song' || modeValue === 'flow' ? modeValue : 'reflex';
       const bpmRaw = $<HTMLInputElement>('#song-bpm').value.trim();
+      const measureA = clampInt($<HTMLInputElement>('#measure-from').value, 0, 999, DEFAULT_SETTINGS.measureFrom);
+      const measureB = clampInt($<HTMLInputElement>('#measure-to').value, 0, 999, DEFAULT_SETTINGS.measureTo);
       const excerptA = clampInt($<HTMLInputElement>('#excerpt-min').value, 1, EXCERPT_MAX_MEASURES, DEFAULT_SETTINGS.excerptMin);
       const excerptB = clampInt($<HTMLInputElement>('#excerpt-max').value, 1, EXCERPT_MAX_MEASURES, DEFAULT_SETTINGS.excerptMax);
       this.settings = {
         mode,
         songMode: radio('songMode').value === 'tempo' ? 'tempo' : 'wait',
         hands: (['right', 'left'] as const).find((h) => h === radio('hands').value) ?? 'both',
-        songRange: radio('songRange').value === 'excerpt' ? 'excerpt' : 'whole',
+        songRange: SONG_RANGES.find((r) => r === radio('songRange').value) ?? 'whole',
+        measureFrom: Math.min(measureA, measureB),
+        measureTo: Math.max(measureA, measureB),
         excerptMin: Math.min(excerptA, excerptB),
         excerptMax: Math.max(excerptA, excerptB),
         excerptFocusWeak: $<HTMLInputElement>('#excerpt-focus-weak').checked,
@@ -1123,7 +1161,7 @@ export class App {
       dim('#key-max-label', keyKind !== 'random');
       $('#mode-label').textContent =
         mode === 'song'
-          ? `${MODE_LABELS[mode]}・${this.settings.songRange === 'excerpt' ? '抜粋・' : ''}${SONG_MODE_LABELS[this.settings.songMode]}`
+          ? `${MODE_LABELS[mode]}・${SONG_RANGE_TAGS[this.settings.songRange]}${SONG_MODE_LABELS[this.settings.songMode]}`
           : mode === 'flow'
             ? `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}・♩=${this.settings.flowBpm}`
             : `${MODE_LABELS[mode]}・${LAYOUT_LABELS[layout]}`;
@@ -1137,7 +1175,9 @@ export class App {
       form.querySelectorAll<HTMLElement>('.shape-only').forEach((el) => (el.hidden = mode !== 'shape'));
       form.querySelectorAll<HTMLElement>('.song-only').forEach((el) => (el.hidden = mode !== 'song'));
       dim('#tempo-options', this.settings.songMode !== 'tempo');
-      dim('#excerpt-options', this.settings.songRange !== 'excerpt');
+      // 選んだ範囲の設定だけを出す
+      $('#excerpt-options').hidden = this.settings.songRange !== 'excerpt';
+      $('#measure-options').hidden = this.settings.songRange !== 'measures';
       $<HTMLButtonElement>('#song-remove').disabled = !this.settings.songSource.startsWith('lib:');
       dim('#focus-weak-label', mode !== 'reflex');
       this.grouper.setWindow(this.settings.chordWindowMs);

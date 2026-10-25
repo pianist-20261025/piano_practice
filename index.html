@@ -49,8 +49,19 @@
               <div class="seg">
                 <label><input type="radio" name="songRange" value="whole" />曲全体</label>
                 <label><input type="radio" name="songRange" value="excerpt" />ランダム抜粋</label>
+                <label><input type="radio" name="songRange" value="measures" />小節を指定</label>
               </div>
-              <span id="excerpt-options">
+              <span id="measure-options" class="range-options">
+                <span class="range"
+                  >小節 <input id="measure-from" type="number" min="0" max="999" aria-label="練習する最初の小節" />〜<input
+                    id="measure-to"
+                    type="number"
+                    min="0"
+                    max="999"
+                    aria-label="練習する最後の小節"
+                /></span>
+              </span>
+              <span id="excerpt-options" class="range-options">
                 <span class="range"
                   ><input id="excerpt-min" type="number" min="1" max="8" aria-label="抜粋する小節数（最小）" />〜<input
                     id="excerpt-max"
@@ -63,7 +74,7 @@
                 >
                 <label class="check"><input id="excerpt-focus-weak" type="checkbox" /> 苦手な小節を多めに</label>
               </span>
-              <span class="hint-inline">抜粋は、ランダムに選んだ数小節だけを弾いて確かめる。「苦手な小節を多めに」で、間違えやすい小節とまだ弾いていない小節が出やすくなる</span>
+              <span class="hint-inline">ランダム抜粋は、ランダムに選んだ数小節だけを弾いて確かめる（「苦手な小節を多めに」で、間違えやすい小節とまだ弾いていない小節が出やすくなる）。小節を指定は、その小節だけを繰り返し弾く</span>
             </div>
             <div class="field">
               <span class="field-label">進め方</span>

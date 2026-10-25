@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { excerptEntries, excerptLabel, pickExcerpt } from './excerpt';
+import { excerptEntries, excerptLabel, measureNumberSpan, pickExcerpt, rangeFromMeasureNumbers } from './excerpt';
 import { buildSteps, type RawEntry, type RawNote } from './steps';
 
 const n = (midi: number, extra: Partial<RawNote> = {}): RawNote => ({
@@ -77,5 +77,23 @@ describe('excerptLabel', () => {
   it('楽譜に書かれた小節番号で表す', () => {
     expect(excerptLabel(steps, entries, { from: 1, to: 3 })).toBe('小節 2〜4');
     expect(excerptLabel(steps, entries, { from: 4, to: 4 })).toBe('小節 5');
+  });
+});
+
+describe('rangeFromMeasureNumbers', () => {
+  it('楽譜の小節番号で指定した範囲を、小節の通し番号にする', () => {
+    expect(rangeFromMeasureNumbers(entries, 2, 4)).toEqual({ from: 1, to: 3 });
+    expect(rangeFromMeasureNumbers(entries, 4, 2)).toEqual({ from: 1, to: 3 });
+    expect(rangeFromMeasureNumbers(entries, 5, 9)).toEqual({ from: 4, to: 4 });
+  });
+
+  it('弱起の曲（最初の小節が 0）でも書かれた番号で選ぶ', () => {
+    const pickup = [e(0, [n(60)], 0), e(1, [n(62)], 1), e(4, [n(64)], 2)].map((x) => ({ ...x, measureNumber: x.measureIndex }));
+    expect(rangeFromMeasureNumbers(pickup, 1, 2)).toEqual({ from: 1, to: 2 });
+    expect(measureNumberSpan(pickup)).toEqual({ first: 0, last: 2 });
+  });
+
+  it('その番号の小節がなければ null', () => {
+    expect(rangeFromMeasureNumbers(entries, 10, 12)).toBeNull();
   });
 });
