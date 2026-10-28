@@ -482,9 +482,11 @@ export class SongPractice {
       const hit = new Set(judge.hits);
       step.notes.forEach((n) => hit.has(n.midi) && this.paint(n, this.cb.colors().correct));
     }
-    // 正しい音とほぼ同時に余計な音を押した（和音に混ざった）→ 先の位置の音でも、読み間違いとして弾き直してもらう。
+    // 正しい音とほぼ同時に余計な音を押した（和音に混ざった）→ 読み間違いとして弾き直してもらう。
+    // ただし、いまの位置で使っていない手の、先の位置の音は、その手が早めに入っただけなので混ざった音にしない
+    // （右手のドを弾き終える直前に、次の位置の左手のシが入ったなど）。
     // やり直しにした直後に同じ和音の続きとして押した音も、弾き直しには数えない
-    const mixed = judge.chordExtras(CHORD_MIX_MS);
+    const mixed = judge.chordExtras(CHORD_MIX_MS).filter((m) => !this.earlyOtherHand(step, m));
     const sameChord = r === 'hit' && this.mixed && ev.time - this.mixed.at <= CHORD_MIX_MS;
     if (mixed.length || sameChord) {
       this.restartChord(step, mixed.length ? mixed : this.mixed!.wrong, ev.time);
@@ -582,6 +584,18 @@ export class SongPractice {
   }
 
   /** i 番目より後の、少し先までのステップに出てくる音（先に押してしまった音の持ち越し先） */
+  /**
+   * midi が、少し先の位置で「いまの位置では音のない手」が弾く音か
+   * （その手が次の音へ早めに入っただけで、いまの位置の和音に混ざった音ではない）
+   */
+  private earlyOtherHand(step: Step, midi: number): boolean {
+    const handsHere = new Set(step.notes.map((n) => n.hand));
+    for (const st of this.steps.slice(this.current + 1, this.current + 1 + LOOKAHEAD_STEPS)) {
+      for (const n of st.notes) if (n.midi === midi && !handsHere.has(n.hand)) return true;
+    }
+    return false;
+  }
+
   private aheadNotes(i: number): Set<number> {
     const out = new Set<number>();
     for (const st of this.steps.slice(i + 1, i + 1 + LOOKAHEAD_STEPS)) for (const n of st.notes) out.add(n.midi);
