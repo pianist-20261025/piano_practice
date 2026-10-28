@@ -40,6 +40,11 @@ const SETTLE_MS = 250;
 const RELEASED_GRACE_MS = 500;
 /** 同じ位置で何も起きないまま、足りない音を示すまでの時間 */
 const HINT_MS = 2500;
+/**
+ * 正しい音とこの時間内に押した余計な音は、和音に混ざった音とみなす（ド・ミの和音をドレミで弾いたなど）。
+ * その位置は弾き直すまで進めない
+ */
+const CHORD_MIX_MS = 120;
 /** 「5小節戻る / 飛ばす」で動く小節数 */
 export const JUMP_MEASURES = 5;
 
@@ -120,6 +125,8 @@ export class SongPractice {
   private pressedHere = false;
   /** 足りない音を示すためのタイマー */
   private hintTimer: number | undefined;
+  /** いまの位置で、最後に和音へ余計な音が混ざってやり直しにした時刻と、その余計な音 */
+  private mixed: { at: number; wrong: readonly number[] } | null = null;
 
   // テンポモード
   private matcher: TimedMatcher | null = null;
@@ -412,10 +419,13 @@ export class SongPractice {
       this.waitJudge = new WaitStepJudge(
         step.notes.map((n) => n.midi),
         this.settings!.judge,
+        // 装飾音と、楽譜上前から鳴り続けている音は、押しても余計な音（和音に混ざった音）にしない
+        [...step.graceNotes, ...step.heldNotes].filter((m) => !step.notes.some((n) => n.midi === m)),
       );
       this.shownAt = performance.now();
       this.firstPressAt = null;
       this.pressedHere = false;
+      this.mixed = null;
       this.optionalHere = new Map();
       this.noteOptional(step);
       const held = new Set(this.cb.heldNotes());
@@ -464,13 +474,21 @@ export class SongPractice {
       }
     }
     this.firstPressAt ??= ev.time;
-    const r = judge.press(ev.note);
+    const r = judge.press(ev.note, ev.time);
     if (r === 'hit') {
       this.pressedHere = true;
       const n = step.notes.find((x) => x.midi === ev.note) ?? step.notes.find((x) => (x.midi - ev.note) % 12 === 0);
       if (n) this.owners.set(ev.note, { hand: n.hand, pressedAt: ev.time });
       const hit = new Set(judge.hits);
       step.notes.forEach((n) => hit.has(n.midi) && this.paint(n, this.cb.colors().correct));
+    }
+    // 正しい音とほぼ同時に余計な音を押した（和音に混ざった）→ 先の位置の音でも、読み間違いとして弾き直してもらう。
+    // やり直しにした直後に同じ和音の続きとして押した音も、弾き直しには数えない
+    const mixed = judge.chordExtras(CHORD_MIX_MS);
+    const sameChord = r === 'hit' && this.mixed && ev.time - this.mixed.at <= CHORD_MIX_MS;
+    if (mixed.length || sameChord) {
+      this.restartChord(step, mixed.length ? mixed : this.mixed!.wrong, ev.time);
+      return;
     }
     // 先の位置の音を弾き始めたのなら、読み間違いではない（下で持ち越す）
     const ahead = this.aheadNotes(this.current);
@@ -483,6 +501,25 @@ export class SongPractice {
     this.renderMini(step, (m) => (hits.has(m) ? 'correct' : 'pending'), judge.extras.filter((m) => !ahead.has(m)));
     if (judge.done) this.finishWaitStep(step);
     else this.scheduleHint(step);
+  }
+
+  /**
+   * 和音に余計な音が混ざった。弾けた音を取り消して、この位置の音だけを弾き直してもらう
+   * （余計な音は記録に残るので、この位置は間違いとして記録される）
+   */
+  private restartChord(step: Step, wrong: readonly number[], at = performance.now()): void {
+    window.clearTimeout(this.settleTimer);
+    this.mixed = { at, wrong };
+    const judge = this.waitJudge!;
+    for (const n of step.notes) this.paint(n, null);
+    judge.restart();
+    this.pressedHere = false;
+    this.cb.feedback(
+      `余計な音: ${this.names(wrong, step)}<span class="sub">${this.names(judge.expected, step)} だけを弾き直してください</span>`,
+      'ng',
+    );
+    this.renderMini(step, () => 'pending', wrong);
+    this.scheduleHint(step);
   }
 
   /** 足りない音が、押さえたままなので少し待って確かめている音（blocked / held）だけか */
@@ -522,8 +559,15 @@ export class SongPractice {
     window.clearTimeout(this.hintTimer);
     const judge = this.waitJudge!;
     const ahead = this.aheadNotes(this.current);
-    // 先の位置の音を先に押していた（和音の一部を早めに押した等）ときは、押さえていれば持ち越し、間違いに数えない
     const held = new Set(this.cb.heldNotes());
+    // 正しい音がそろったときに、この位置で押した余計な音（先の位置の音でないもの）も押さえたまま
+    // → 和音に混ざっているので弾き直し（やり直しの前に押した音も含める。押さえたまま正しい音だけ弾き直しても通さない）
+    const wrongHeld = [...new Set(judge.extras)].filter((m) => held.has(m) && !ahead.has(m));
+    if (wrongHeld.length) {
+      this.restartChord(step, wrongHeld);
+      return;
+    }
+    // 先の位置の音を先に押していた（和音の一部を早めに押した等）ときは、押さえていれば持ち越し、間違いに数えない
     const early = judge.extras.filter((m) => held.has(m) && ahead.has(m));
     this.record({
       step,

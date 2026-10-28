@@ -53,6 +53,13 @@ export interface Step {
   time: number;
   /** その位置で新しく鳴り始める、判定対象の音（低い順、同じ鍵盤は1つ） */
   notes: StepNote[];
+  /** その位置の装飾音（前打音など）の高さ。判定しないので、押しても余計な音に数えない */
+  graceNotes: number[];
+  /**
+   * 楽譜上、この位置より前から鳴り続けている音（長い音・タイ）の高さ（この位置の判定対象の音は除く）。
+   * 弾き直したり押さえたままにしたりしても、余計な音に数えない
+   */
+  heldNotes: number[];
 }
 
 /**
@@ -74,13 +81,21 @@ export function buildSteps(entries: readonly RawEntry[], hands: HandSetting = 'b
   /** これまでに鳴り始めた音の、鳴っている区間（両手とも。片手モードでも楽譜上の持続は同じ） */
   let sounding: { midi: number; start: number; end: number }[] = [];
   /** 端数のずれで別のカーソル位置に分かれた、同じ時刻の音をまとめるための直前の位置 */
-  let group: { time: number; notes: StepNote[]; entry: RawEntry; held: Set<number> } | null = null;
+  let group: { time: number; notes: StepNote[]; entry: RawEntry; held: Set<number>; graces: Set<number> } | null = null;
 
   const flush = () => {
     if (group?.notes.length) {
       group.notes.sort((a, b) => a.midi - b.midi);
       const e = group.entry;
-      steps.push({ entryIndex: e.index, measureIndex: e.measureIndex, measureNumber: e.measureNumber, time: e.time, notes: group.notes });
+      steps.push({
+        entryIndex: e.index,
+        measureIndex: e.measureIndex,
+        measureNumber: e.measureNumber,
+        time: e.time,
+        notes: group.notes,
+        graceNotes: [...group.graces],
+        heldNotes: [...group.held].filter((m) => !group!.notes.some((n) => n.midi === m)),
+      });
     }
     group = null;
   };
@@ -94,13 +109,14 @@ export function buildSteps(entries: readonly RawEntry[], hands: HandSetting = 'b
       sounding = sounding.filter((x) => x.end > t + TIME_EPS);
       // この位置より前から鳴り続けている音
       const held = new Set(sounding.filter((x) => x.start < t - TIME_EPS).map((x) => x.midi));
-      group = { time: t, notes: [], entry, held };
+      group = { time: t, notes: [], entry, held, graces: new Set() };
     }
     lastTime = Math.max(lastTime, t);
     const g = group;
     // この位置でタイが続いている音も、鳴り続けている音
     for (const n of entry.notes) if (n.tieContinuation && !n.rest) g.held.add(n.midi);
     entry.notes.forEach((n, rawIndex) => {
+      if (n.grace && !n.rest) g.graces.add(n.midi);
       if (n.rest || n.grace || n.tieContinuation) return;
       if (hands !== 'both' && n.hand !== hands) return;
       const ref = { entryIndex: entry.index, rawIndex };

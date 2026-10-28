@@ -25,6 +25,10 @@ describe('buildSteps', () => {
     ]);
     expect(steps.map((s) => s.time)).toEqual([0, 1.5]);
     expect(steps[1].notes.map((x) => x.midi)).toEqual([64]);
+    // 装飾音は判定しないが、押しても余計な音にしないよう高さを覚えておく
+    expect(steps[1].graceNotes).toEqual([62]);
+    // 前の位置からタイで鳴り続けている音も覚えておく
+    expect(steps[1].heldNotes).toEqual([60]);
   });
 
   it('片手モードでは判定しない手の音を除く', () => {
